@@ -1,89 +1,79 @@
-# MysqlVector Library
+---
 
-The MysqlVector library provides an abstraction to perform CRUD and search operations on vectors stored in a MySQL database, without requiring any extensions. This PHP-based solution allows efficient vector manipulation, including dot product calculations and similarity search in a normalized space.
+# **MySQLVector Library**
 
-## Installation
+## **Overview**
 
-**Note:** Before using this library, ensure you have a MySQL database set up and accessible.
+A PHP-based utility designed for efficient management and querying of vectors in a MySQL database. It supports operations like insertion, updating, deletion, and cosine similarity-based search.
 
-Clone this repository or download the library to your project.
+## **Usage Instructions**
 
-## Features
+### **1. Initialize `VectorTable`**
 
-1. **Easy Setup:** Quickly create tables to store vector meta-data and values with built-in methods.
-2. **CRUD Operations:** Insert (upsert), delete, and fetch vectors directly.
-3. **Dot Product:** Calculate the dot product between vectors, where one or both vectors are stored in the database.
-4. **Similarity Search:** Find vectors most similar to a given input.
-5. **Normalization:** Retrieve the normalized version of a vector.
-
-## Usage
-
-### Instantiation
-
-To create a new vector table instance:
+To begin, instantiate the `VectorTable` class:
 
 ```php
 use MHz\MysqlVector\VectorTable;
 
-$vectorTable = new VectorTable('table_name', 3);  // 'table_name' and 3-dimensional vector.
+$dimension = 512;
+$vectorTable = new VectorTable('test_table', $dimension);
 ```
 
-### Creating Tables
+### **2. Create a New Vector Table**
 
-For the first time, or when you wish to create tables:
+To prepare the necessary tables in the database:
 
 ```php
-foreach ($vectorTable->getCreateStatements() as $statement) {
-    $mysqli->query($statement);
-}
+$vectorTable->initialize($mysqli);
 ```
 
-### Upserting a Vector
+### **3. Inserting and Updating Vectors**
 
-To insert or update (upsert) a vector:
+To insert a new vector:
 
 ```php
-$id = $vectorTable->upsert($mysqli, [1.0, 2.0, 3.0]);  // Returns the vector ID.
+$vec = [/* ... vector values ... */];
+$id = $vectorTable->upsert($mysqli, $vec);
 ```
 
-### Retrieving a Vector
-
-To retrieve vectors by their IDs:
+To update an existing vector, provide its ID:
 
 ```php
-$result = $vectorTable->select($mysqli, [$id1, $id2]);
+$vectorTable->upsert($mysqli, $vec, $specificId);
 ```
 
-### Calculating the Dot Product
+### **4. Delete Vectors**
 
-To calculate the dot product between two vectors:
+To remove a specific vector:
 
 ```php
-$dotProduct = $vectorTable->dot($mysqli, $idA, $idB);
+$vectorTable->delete($mysqli, $id);
 ```
 
-### Searching for Similar Vectors
+### **5. Search Based on Cosine Similarity**
 
-To find vectors most similar to an input:
+Find vectors most similar to a target vector:
 
 ```php
-$results = $vectorTable->search($mysqli, [1.0, 2.0, 3.0], 5);  // Returns top 5 most similar vectors.
+$results = $vectorTable->search($mysqli, $targetVector, $limit);
 ```
 
-## Testing
+## **Contributions**
 
-The library includes a test suite using PHPUnit. Ensure you have PHPUnit installed, and then run the tests from the root directory:
+We welcome contributions! If you'd like to contribute, please follow the standard pull request process:
 
-```
-phpunit --bootstrap vendor/autoload.php tests/
-```
+1. Fork the repository.
+2. Create a new branch with a meaningful name.
+3. Implement your changes or enhancements.
+4. Submit a pull request to the main branch.
 
-## Contributing
+Ensure you've tested your code before submitting a pull request.
 
-Pull requests are welcome. For major changes, please open an issue first to discuss what you would like to change.
+## **License**
 
-Please make sure to update tests as appropriate.
+This project is licensed under the MIT License. The MIT License is a permissive free software license allowing reuse within proprietary software provided all copies of the licensed software include a copy of the MIT License terms.
 
-## License
+---
 
-Please refer to the `LICENSE` file in the repository for licensing information.
+**Note:** This library is pure SQL and does not use any native C bindings. Therefore it is not as fast as it could be. However, it is still useful for small-scale applications (300 high-dimensional vectors or less).
+If you would like to contribute any performance optimizations, please feel free to submit a pull request.
