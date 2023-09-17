@@ -96,6 +96,33 @@ class VectorTableTest extends TestCase
         $this->mysqli->rollback();
     }
 
+    public function testSearch() {
+        $this->mysqli->begin_transaction();
+
+        $vecs = [
+            [1.0, 2.0, 3.0],
+            [4.0, 5.0, 6.0],
+            [7.0, 8.0, 9.0],
+            [10.0, 11.0, 12.0],
+            [13.0, 14.0, 15.0],
+        ];
+
+        $ids = [];
+        foreach ($vecs as $vec) {
+            $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
+        }
+
+        $results = $this->vectorTable->search($this->mysqli, [1, 2, 3], 2);
+        $this->assertEquals(2, count($results));
+        $this->assertEquals($ids[0], $results[0]['id']);
+        $this->assertEquals($ids[1], $results[1]['id']);
+
+        $results = $this->vectorTable->search($this->mysqli, [13.0, 14.0, 15.0], 2);
+        $this->assertEquals(2, count($results));
+        $this->assertEquals($ids[4], $results[0]['id']);
+        $this->assertEquals($ids[3], $results[1]['id']);
+    }
+
     public static function tearDownAfterClass(): void
     {
         // Clean up the database and close connection

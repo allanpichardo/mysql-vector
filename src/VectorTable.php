@@ -29,8 +29,9 @@ class VectorTable
         $metaQuery =
             "CREATE TABLE %s %s (
                 vector_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                magnitude DOUBLE NOT NULL,
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-             ) ENGINE=%s;";
+            ) ENGINE=%s;";
         $metaQuery = sprintf($metaQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getMetaTableName(), $this->engine);
 
         $valuesQuery =
@@ -39,6 +40,7 @@ class VectorTable
                 vector_id INT UNSIGNED NOT NULL,
                 element_position INT,
                 vector_value DOUBLE,
+                normalized_value DOUBLE,
                 FOREIGN KEY (vector_id) REFERENCES vector_meta_%s(vector_id)
             ) ENGINE=%s;";
         $valuesQuery = sprintf($valuesQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getValuesTableName(), $this->name, $this->engine);
@@ -70,11 +72,14 @@ class VectorTable
             throw new \Exception('Vector dimension does not match');
         }
 
+        $magnitude = $this->getMagnitude($vector);
+
         $vectorId = $id;
         if(empty($vectorId)) {
             $metaTableName = $this->getMetaTableName();
 
-            $statement = $mysqli->prepare("INSERT INTO $metaTableName () VALUES ()");
+            $statement = $mysqli->prepare("INSERT INTO $metaTableName (magnitude) VALUES (?)");
+            $statement->bind_param('d', $magnitude);
             $success = $statement->execute();
 
             if (!$success) {
@@ -87,8 +92,11 @@ class VectorTable
 
         $valuesTableName = $this->getValuesTableName();
 
-        $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?)'));
-        $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value)");
+        $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?)'));
+        $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+        if(!$statement) {
+            throw new \Exception($mysqli->error);
+        }
 
         $bindParams = [];
         $types = '';
@@ -96,7 +104,8 @@ class VectorTable
             $bindParams[] = $vectorId;
             $bindParams[] = $position;
             $bindParams[] = $vector[$position];
-            $types .= 'iid';
+            $bindParams[] = $vector[$position] / $magnitude;
+            $types .= 'iidd';
         }
         $refs = [];
         foreach ($bindParams as $key => $value) {
@@ -227,5 +236,61 @@ class VectorTable
         $statement->fetch();
         $statement->close();
         return $count;
+    }
+
+    private function getMagnitude(array $vector): float
+    {
+        $sum = 0;
+        foreach ($vector as $value) {
+            $sum += $value * $value;
+        }
+
+        return sqrt($sum);
+    }
+
+    public function search(\mysqli $mysqli, array $vector, int $n = 10): array {
+        $valuesTableName = $this->getValuesTableName();
+        $metaTableName = $this->getMetaTableName();
+
+        // Normalize the input vector
+        $normalizedVector = $this->normalize($vector);
+
+        $dotProducts = [];
+        foreach ($normalizedVector as $position => $value) {
+            $dotProducts[] = "SUM(CASE WHEN element_position = $position THEN normalized_value ELSE 0 END) * $value";
+        }
+        $dotProductQuery = implode(' + ', $dotProducts);
+
+        $query = "
+        SELECT meta.vector_id, ($dotProductQuery) as similarity
+        FROM $valuesTableName AS val
+        JOIN $metaTableName AS meta ON val.vector_id = meta.vector_id
+        GROUP BY meta.vector_id
+        ORDER BY similarity DESC
+        LIMIT $n
+    ";
+
+        $stmt = $mysqli->query($query);
+
+        $results = [];
+        while ($row = $stmt->fetch_assoc()) {
+            $results[] = [
+                'id' => $row['vector_id'],
+                'similarity' => (double)$row['similarity']
+            ];
+        }
+
+        return $results;
+    }
+
+    private function normalize(array $vector): array {
+        $magnitude = $this->getMagnitude($vector);
+        if ($magnitude == 0) {
+            return $vector; // This may need special handling or an exception
+        }
+        foreach ($vector as $key => $value) {
+            $vector[$key] = $value / $magnitude;
+        }
+        return $vector;
     }
 }
