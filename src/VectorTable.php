@@ -25,7 +25,7 @@ class VectorTable
         return sprintf('vector_values_%s', $this->name);
     }
 
-    public function getCreateStatements(bool $ifNotExists = true): array {
+    protected function getCreateStatements(bool $ifNotExists = true): array {
         $metaQuery =
             "CREATE TABLE %s %s (
                 vector_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
@@ -57,14 +57,35 @@ class VectorTable
         return [$metaQuery, $valuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery];
     }
 
-    public function delete(\mysqli $mysqli, $id): bool {
-        $del = $mysqli->prepare("DELETE FROM {$this->getMetaTableName()} WHERE vector_id = ?");
-        $del->bind_param('i', $id);
-        return $del->execute();
+    /**
+     * Create the tables required for storing vectors
+     * @param \mysqli $mysqli The mysqli connection
+     * @param bool $ifNotExists Whether to use IF NOT EXISTS in the CREATE TABLE statements
+     * @return void
+     * @throws \Exception If the tables could not be created
+     */
+    public function initialize(\mysqli $mysqli, bool $ifNotExists = true): void
+    {
+        $mysqli->begin_transaction();
+
+        foreach ($this->getCreateStatements($ifNotExists) as $statement) {
+            $success = $mysqli->query($statement);
+            if (!$success) {
+                $mysqli->rollback();
+                throw new \Exception($mysqli->error);
+            }
+        }
+
+        $mysqli->commit();
     }
 
     /**
-     * @throws \Exception
+     * Insert or update a vector
+     * @param \mysqli $mysqli The mysqli connection
+     * @param array $vector The vector to insert or update
+     * @param int|null $id Optional ID of the vector to update
+     * @return int The ID of the inserted or updated vector
+     * @throws \Exception If the vector could not be inserted or updated
      */
     public function upsert(\mysqli $mysqli, array $vector, int $id = null): int
     {
@@ -128,8 +149,8 @@ class VectorTable
 
     /**
      * Select one or more vectors by id
-     * @param \mysqli $mysqli
-     * @param array $ids
+     * @param \mysqli $mysqli The mysqli connection
+     * @param array $ids The ids of the vectors to select
      * @return array Array of vectors
      */
     public function select(\mysqli $mysqli, array $ids): array {
@@ -228,6 +249,11 @@ class VectorTable
         }
     }
 
+    /**
+     * Returns the number of vectors stored in the database
+     * @param \mysqli $mysqli The mysqli connection
+     * @return int The number of vectors
+     */
     public function count(\mysqli $mysqli): int {
         $metaTableName = $this->getMetaTableName();
         $statement = $mysqli->prepare("SELECT COUNT(vector_id) FROM $metaTableName");
@@ -248,6 +274,14 @@ class VectorTable
         return sqrt($sum);
     }
 
+    /**
+     * Finds the vectors that are most similar to the given vector
+     * @param \mysqli $mysqli The mysqli connection
+     * @param array $vector The vector to query for
+     * @param int $n The number of results to return
+     * @return array Array of results containing the id, similarity, and vector
+     * @throws \Exception
+     */
     public function search(\mysqli $mysqli, array $vector, int $n = 10): array {
         $valuesTableName = $this->getValuesTableName();
         $metaTableName = $this->getMetaTableName();
@@ -261,36 +295,88 @@ class VectorTable
         }
         $dotProductQuery = implode(' + ', $dotProducts);
 
+        $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
+
         $query = "
-        SELECT meta.vector_id, ($dotProductQuery) as similarity
-        FROM $valuesTableName AS val
-        JOIN $metaTableName AS meta ON val.vector_id = meta.vector_id
-        GROUP BY meta.vector_id
-        ORDER BY similarity DESC
-        LIMIT $n
-    ";
+                SELECT 
+                    meta.vector_id, 
+                    ($dotProductQuery) as similarity,
+                    GROUP_CONCAT(val.vector_value ORDER BY val.element_position ASC) as vector_values
+                FROM 
+                    $valuesTableName AS val
+                JOIN 
+                    $metaTableName AS meta ON val.vector_id = meta.vector_id
+                GROUP BY 
+                    meta.vector_id
+                ORDER BY 
+                    similarity DESC
+                LIMIT 
+                    $n
+            ";
 
         $stmt = $mysqli->query($query);
+        if(!$stmt) {
+            throw new \Exception($mysqli->error);
+        }
 
         $results = [];
         while ($row = $stmt->fetch_assoc()) {
             $results[] = [
                 'id' => $row['vector_id'],
-                'similarity' => (double)$row['similarity']
+                'similarity' => (double)$row['similarity'],
+                'vector' => array_map('floatval', explode(',', $row['vector_values']))
             ];
         }
 
         return $results;
     }
 
-    private function normalize(array $vector): array {
+    private function normalize(array $vector, float $epsilon = 1e-10): array {
         $magnitude = $this->getMagnitude($vector);
         if ($magnitude == 0) {
-            return $vector; // This may need special handling or an exception
+            $magnitude = $epsilon;
         }
         foreach ($vector as $key => $value) {
             $vector[$key] = $value / $magnitude;
         }
         return $vector;
+    }
+
+    /**
+     * Remove a vector from the database
+     * @param \mysqli $mysqli The mysqli connection
+     * @param int $id The id of the vector to remove
+     * @return void
+     * @throws \Exception
+     */
+    public function delete(\mysqli $mysqli, int $id): void {
+        $metaTableName = $this->getMetaTableName();
+        $valuesTableName = $this->getValuesTableName();
+
+        $mysqli->begin_transaction();
+
+        $statement = $mysqli->prepare("DELETE FROM $valuesTableName WHERE vector_id = ?");
+        $statement->bind_param('i', $id);
+        $success = $statement->execute();
+
+        if(!$success) {
+            $mysqli->rollback();
+            throw new \Exception($statement->error);
+        }
+
+        $statement->close();
+
+        $statement = $mysqli->prepare("DELETE FROM $metaTableName WHERE vector_id = ?");
+        $statement->bind_param('i', $id);
+        $success = $statement->execute();
+
+        if(!$success) {
+            $mysqli->rollback();
+            throw new \Exception($statement->error);
+        }
+
+        $statement->close();
+
+        $mysqli->commit();
     }
 }

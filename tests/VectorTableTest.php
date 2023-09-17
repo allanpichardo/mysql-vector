@@ -9,6 +9,7 @@ class VectorTableTest extends TestCase
 {
     private $mysqli;
     private $vectorTable;
+    private $dimension = 512;
 
     protected function setUp(): void
     {
@@ -20,12 +21,20 @@ class VectorTableTest extends TestCase
         }
 
         // Setup VectorTable for testing
-        $this->vectorTable = new VectorTable('test_table', 3);
+        $this->vectorTable = new VectorTable('test_table', $this->dimension);
 
         // Create required tables for testing
-        foreach ($this->vectorTable->getCreateStatements() as $statement) {
-            $this->mysqli->query($statement);
+        $this->vectorTable->initialize($this->mysqli);
+    }
+
+    private function getRandomVectors($count, $dimension) {
+        $vecs = [];
+        for ($i = 0; $i < $count; $i++) {
+            for($j = 0; $j < $dimension; $j++) {
+                $vecs[$i][$j] = mt_rand(0, 1000) / 1000;
+            }
         }
+        return $vecs;
     }
 
     public function testGetMetaTableName()
@@ -43,11 +52,7 @@ class VectorTableTest extends TestCase
     public function testUpsert() {
         $this->mysqli->begin_transaction();
 
-        $vecs = [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [7.0, 8.0, 9.0]
-        ];
+        $vecs = $this->getRandomVectors(1000, $this->dimension);
 
         $ids = [];
 
@@ -55,7 +60,7 @@ class VectorTableTest extends TestCase
             $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
         }
 
-        $this->assertEquals(3, $this->vectorTable->count($this->mysqli));
+        $this->assertEquals(count($vecs), $this->vectorTable->count($this->mysqli));
 
         $results = $this->vectorTable->select($this->mysqli, $ids);
         $i = 0;
@@ -65,10 +70,10 @@ class VectorTableTest extends TestCase
         }
 
         foreach ($results as $id => $result) {
-            $this->vectorTable->upsert($this->mysqli, [9, 8, 7], $id);
+            $this->vectorTable->upsert($this->mysqli, $vecs[0], $id);
             $results = $this->vectorTable->select($this->mysqli, [$id]);
             $this->assertEquals(1, count($results));
-            $this->assertEquals([9, 8, 7], $results[$id]);
+            $this->assertEquals($vecs[0], $results[$id]);
         }
 
         $this->mysqli->rollback();
@@ -77,21 +82,25 @@ class VectorTableTest extends TestCase
     public function testDot() {
         $this->mysqli->begin_transaction();
 
-        $vecs = [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [7.0, 8.0, 9.0]
-        ];
+        $vecs = [];
+        for($i = 0; $i < 2; $i++) {
+            for($j = 0; $j < $this->dimension; $j++) {
+                $vecs[$i][$j] = 0.5;
+            }
+        }
 
         $ids = [];
         foreach ($vecs as $vec) {
             $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
         }
 
-        $this->assertEquals(32, $this->vectorTable->dot($this->mysqli, $ids[0], $ids[1]));
-        $this->assertEquals(122, $this->vectorTable->dot($this->mysqli, $ids[2], $ids[1]));
+        $dotProduct = 0;
+        for ($i = 0; $i < count($vecs[0]); $i++) {
+            $dotProduct += $vecs[0][$i] * $vecs[1][$i];
+        }
 
-        $this->assertEquals(194, $this->vectorTable->dot($this->mysqli, $ids[2], [7, 8, 9]));
+        $this->assertEquals($dotProduct, $this->vectorTable->dot($this->mysqli, $ids[0], $ids[1]));
+        $this->assertEquals($dotProduct, $this->vectorTable->dot($this->mysqli, $ids[1], $vecs[0]));
 
         $this->mysqli->rollback();
     }
@@ -99,28 +108,48 @@ class VectorTableTest extends TestCase
     public function testSearch() {
         $this->mysqli->begin_transaction();
 
-        $vecs = [
-            [1.0, 2.0, 3.0],
-            [4.0, 5.0, 6.0],
-            [7.0, 8.0, 9.0],
-            [10.0, 11.0, 12.0],
-            [13.0, 14.0, 15.0],
-        ];
+        // Insert 1000 random vectors
+        $vecs = $this->getRandomVectors(1000, $this->dimension);
+        foreach ($vecs as $vec) {
+            $this->vectorTable->upsert($this->mysqli, $vec);
+        }
+
+        // Let's insert a known vector
+        $targetVector = array_fill(0, $this->dimension, 0.5);
+        $this->vectorTable->upsert($this->mysqli, $targetVector);
+
+        // Now, we search for this vector
+        $results = $this->vectorTable->search($this->mysqli, $targetVector, 10);
+
+        // At least the first result should be our target vector or very close
+        $firstResultVector = $results[0]['vector'];
+        $firstResultSimilarity = $results[0]['similarity'];
+
+        $this->assertEquals($targetVector, $firstResultVector, "The most similar vector should be the target vector itself");
+        $this->assertEqualsWithDelta(1.0, $firstResultSimilarity, 0.000000001, "The similarity of the most similar vector should be the highest possible value");
+
+        $this->mysqli->rollback();
+    }
+
+    public function testDelete(): void {
+        $this->mysqli->begin_transaction();
 
         $ids = [];
+        // Insert 1000 random vectors
+        $vecs = $this->getRandomVectors(1000, $this->dimension);
         foreach ($vecs as $vec) {
             $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
         }
 
-        $results = $this->vectorTable->search($this->mysqli, [1, 2, 3], 2);
-        $this->assertEquals(2, count($results));
-        $this->assertEquals($ids[0], $results[0]['id']);
-        $this->assertEquals($ids[1], $results[1]['id']);
+        $this->assertEquals(count($ids), $this->vectorTable->count($this->mysqli));
 
-        $results = $this->vectorTable->search($this->mysqli, [13.0, 14.0, 15.0], 2);
-        $this->assertEquals(2, count($results));
-        $this->assertEquals($ids[4], $results[0]['id']);
-        $this->assertEquals($ids[3], $results[1]['id']);
+        foreach ($ids as $id) {
+            $this->vectorTable->delete($this->mysqli, $id);
+        }
+
+        $this->assertEquals(0, $this->vectorTable->count($this->mysqli));
+
+        $this->mysqli->rollback();
     }
 
     public static function tearDownAfterClass(): void
@@ -135,6 +164,8 @@ class VectorTableTest extends TestCase
 
     protected function tearDown(): void
     {
+        $this->mysqli->query("DROP TABLE " . $this->vectorTable->getMetaTableName());
+        $this->mysqli->query("DROP TABLE " . $this->vectorTable->getValuesTableName());
         $this->mysqli->close();
     }
 
