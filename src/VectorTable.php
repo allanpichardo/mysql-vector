@@ -7,12 +7,21 @@ class VectorTable
     private string $name;
     private int $dimension;
     private string $engine;
+    private float $pruningThreshold;
 
-    public function __construct(string $name, int $dimension, string $engine = 'InnoDB')
+    /**
+     * Instantiate a new VectorTable object.
+     * @param string $name Name of the table.
+     * @param int $dimension Dimension of the vectors.
+     * @param float $pruningThreshold Threshold for bounding box pruning. This value must be consistent across your dataset and can't be changed once set. Lower values will result in more pruning. Default is 0.7.
+     * @param string $engine
+     */
+    public function __construct(string $name, int $dimension, float $pruningThreshold = 0.7, string $engine = 'InnoDB')
     {
         $this->name = $name;
         $this->dimension = $dimension;
         $this->engine = $engine;
+        $this->pruningThreshold = $pruningThreshold;
     }
 
     public function getMetaTableName(): string
@@ -41,6 +50,8 @@ class VectorTable
                 element_position INT,
                 vector_value DOUBLE,
                 normalized_value DOUBLE,
+                lower_bound DOUBLE,
+                upper_bound DOUBLE,
                 FOREIGN KEY (vector_id) REFERENCES vector_meta_%s(vector_id)
             ) ENGINE=%s;";
         $valuesQuery = sprintf($valuesQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getValuesTableName(), $this->name, $this->engine);
@@ -48,13 +59,22 @@ class VectorTable
         $indexValuesQuery = "CREATE INDEX vector_id_index_%s ON vector_values_%s (vector_id);";
         $indexValuesQuery = sprintf($indexValuesQuery, $this->name, $this->name);
 
+        $indexMetaQuery = "CREATE INDEX meta_vector_id_index_%s ON vector_meta_%s (vector_id);";
+        $indexMetaQuery = sprintf($indexMetaQuery, $this->name, $this->name);
+
         $indexPositionQuery = "CREATE INDEX element_position_index_%s ON vector_values_%s (element_position);";
         $indexPositionQuery = sprintf($indexPositionQuery, $this->name, $this->name);
+
+        $indexNormalizedQuery = "CREATE INDEX normalized_value_index_%s ON vector_values_%s (normalized_value);";
+        $indexNormalizedQuery = sprintf($indexNormalizedQuery, $this->name, $this->name);
 
         $uniqueConstraintQuery = "ALTER TABLE vector_values_%s ADD CONSTRAINT unique_vector_id_element_position UNIQUE (vector_id, element_position);";
         $uniqueConstraintQuery = sprintf($uniqueConstraintQuery, $this->name);
 
-        return [$metaQuery, $valuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery];
+        $compositeIndexQuery = "CREATE INDEX composite_index_%s ON vector_values_%s (element_position, vector_id, normalized_value);";
+        $compositeIndexQuery = sprintf($compositeIndexQuery, $this->name, $this->name);
+
+        return [$metaQuery, $valuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery, $indexMetaQuery, $indexNormalizedQuery, $compositeIndexQuery];
     }
 
     /**
@@ -94,6 +114,9 @@ class VectorTable
         }
 
         $magnitude = $this->getMagnitude($vector);
+        $boundingBox = $this->getBoundingBox($vector, $this->pruningThreshold);
+        $lowerBound = $boundingBox[0];
+        $upperBound = $boundingBox[1];
 
         $vectorId = $id;
         if(empty($vectorId)) {
@@ -113,8 +136,8 @@ class VectorTable
 
         $valuesTableName = $this->getValuesTableName();
 
-        $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?)'));
-        $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+        $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?, ?, ?)'));
+        $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
         if(!$statement) {
             throw new \Exception($mysqli->error);
         }
@@ -126,7 +149,9 @@ class VectorTable
             $bindParams[] = $position;
             $bindParams[] = $vector[$position];
             $bindParams[] = $vector[$position] / $magnitude;
-            $types .= 'iidd';
+            $bindParams[] = $lowerBound[$position];
+            $bindParams[] = $upperBound[$position];
+            $types .= 'iidddd';
         }
         $refs = [];
         foreach ($bindParams as $key => $value) {
@@ -181,6 +206,124 @@ class VectorTable
         $statement->close();
 
         return $result;
+    }
+
+    function selectBatch(\mysqli $mysqli, $batchSize, $offset) {
+        $valuesTableName = $this->getValuesTableName();
+        $metaTableName = $this->getMetaTableName();
+
+        $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
+
+        // Adjust the query to join with meta table and use GROUP_CONCAT to aggregate values
+        $query = "
+        SELECT 
+            meta.vector_id, 
+            GROUP_CONCAT(val.vector_value ORDER BY val.element_position ASC) AS vector_values,
+            GROUP_CONCAT(val.normalized_value ORDER BY val.element_position ASC) AS normalized_values
+        FROM 
+            $metaTableName AS meta
+        JOIN 
+            $valuesTableName AS val ON meta.vector_id = val.vector_id
+        GROUP BY 
+            meta.vector_id
+        LIMIT ?, ?
+    ";
+
+        $statement = $mysqli->prepare($query);
+        $statement->bind_param('ii', $offset, $batchSize);
+        $statement->execute();
+        $statement->bind_result($vectorId, $vectorValues, $normalizedValues);
+
+        $result = [];
+        while ($statement->fetch()) {
+            $result[$vectorId] = [
+                'vector' => array_map('floatval', explode(',', $vectorValues)),
+                'normalized_vector' => array_map('floatval', explode(',', $normalizedValues))
+            ];
+        }
+
+        $statement->close();
+
+        return $result;
+    }
+
+    public function selectAll(\mysqli $mysqli): array {
+        $valuesTableName = $this->getValuesTableName();
+
+        $statement = $mysqli->prepare("SELECT vector_id, element_position, vector_value, normalized_value FROM $valuesTableName");
+        $statement->execute();
+        $statement->bind_result($vectorId, $position, $value, $normalizedValue);
+
+        $result = [];
+        while ($statement->fetch()) {
+            if (!isset($result[$vectorId])) {
+                $result[$vectorId] = [
+                    'vector' => [],
+                    'normalized_vector' => []
+                ];
+            }
+
+            $result[$vectorId]['vector'][$position] = $value;
+            $result[$vectorId]['normalized_vector'][$position] = $normalizedValue;
+        }
+
+        $statement->close();
+
+        return $result;
+    }
+
+    private function dotProduct(array $vectorA, array $vectorB): float {
+        $product = 0;
+
+        foreach ($vectorA as $position => $value) {
+            if (isset($vectorB[$position])) {
+                $product += $value * $vectorB[$position];
+            }
+        }
+
+        return $product;
+    }
+
+    public function searchPHP(\mysqli $mysqli, array $vector, int $n = 10, int $batchSize = 10): array {
+
+        $offset = 0;
+        // Normalize the input vector
+        $normalizedVector = $this->normalize($vector);
+        $boundingBox = $this->getBoundingBox($vector);
+        $lowerBound = $boundingBox[0];
+        $upperBound = $boundingBox[1];
+
+        $results = [];
+        do {
+            $vectors = $this->selectBatch($mysqli, $batchSize, $offset);
+            foreach ($vectors as $vectorId => $storedVector) {
+                $isWithinBoundingBox = true;
+                foreach ($storedVector['normalized_vector'] as $position => $value) {
+                    if ($value < $lowerBound[$position] || $value > $upperBound[$position]) {
+                        $isWithinBoundingBox = false;
+                        break;
+                    }
+                }
+
+                if ($isWithinBoundingBox) {
+                    $dotProduct = $this->dotProduct($normalizedVector, $storedVector['normalized_vector']);
+
+                    $results[] = [
+                        'id' => $vectorId,
+                        'similarity' => $dotProduct,
+                        'vector' => $storedVector['vector']
+                    ];
+                }
+            }
+            $offset += $batchSize;
+        } while (!empty($vectors));
+
+        // Sort results based on similarity
+        usort($results, function($a, $b) {
+            return $b['similarity'] <=> $a['similarity'];
+        });
+
+        return array_slice($results, 0, $n);
     }
 
     protected function dotInputWithStored(\mysqli $mysqli, array $vector, int $id) {
@@ -274,6 +417,17 @@ class VectorTable
         return sqrt($sum);
     }
 
+    private function getBoundingBox(array $vector, float $threshold = 0.7): array {
+        $min_vec = [];
+        $max_vec = [];
+        for($i = 0; $i < count($vector); $i++) {
+            $min_vec[$i] = min($vector[$i] - $threshold, $vector[$i] + $threshold);
+            $max_vec[$i] = max($vector[$i] - $threshold, $vector[$i] + $threshold);
+        }
+
+        return [$min_vec, $max_vec];
+    }
+
     /**
      * Finds the vectors that are most similar to the given vector
      * @param \mysqli $mysqli The mysqli connection
@@ -289,33 +443,70 @@ class VectorTable
         // Normalize the input vector
         $normalizedVector = $this->normalize($vector);
 
+        // Generate bounding box query conditions
+        $boundingBoxConditions = [];
+        $boundingBox = $this->getBoundingBox($vector);
+        $lowerBound = $boundingBox[0];
+        $upperBound = $boundingBox[1];
+        foreach ($normalizedVector as $position => $value) {
+            $boundingBoxConditions[] = "(element_position = $position AND normalized_value BETWEEN {$lowerBound[$position]} AND {$upperBound[$position]})";
+        }
+        $boundingBoxQuery = implode(' OR ', $boundingBoxConditions);
+
+        $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
+
+        // Retrieve vector_ids satisfying the bounding box condition
+        $vectorIdsQuery = "
+        SELECT DISTINCT vector_id 
+        FROM $valuesTableName
+        USE INDEX (composite_index_{$this->name})
+        WHERE $boundingBoxQuery
+    ";
+        $vectorIdsResult = $mysqli->query($vectorIdsQuery);
+        if (!$vectorIdsResult) {
+            throw new \Exception($mysqli->error);
+        }
+
+        $vectorIds = [];
+        while ($row = $vectorIdsResult->fetch_assoc()) {
+            $vectorIds[] = $row['vector_id'];
+        }
+
+        // If no vector_ids satisfy the bounding box condition, return empty result
+        if (empty($vectorIds)) {
+            return [];
+        }
+
+        // Calculate dot products for these vector_ids
         $dotProducts = [];
         foreach ($normalizedVector as $position => $value) {
             $dotProducts[] = "SUM(CASE WHEN element_position = $position THEN normalized_value ELSE 0 END) * $value";
         }
         $dotProductQuery = implode(' + ', $dotProducts);
 
-        $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
+        $vectorIdsPlaceholder = implode(', ', $vectorIds);
 
-        $query = "
-                SELECT 
-                    meta.vector_id, 
-                    ($dotProductQuery) as similarity,
-                    GROUP_CONCAT(val.vector_value ORDER BY val.element_position ASC) as vector_values
-                FROM 
-                    $valuesTableName AS val
-                JOIN 
-                    $metaTableName AS meta ON val.vector_id = meta.vector_id
-                GROUP BY 
-                    meta.vector_id
-                ORDER BY 
-                    similarity DESC
-                LIMIT 
-                    $n
-            ";
+        $finalQuery = "
+        SELECT 
+            meta.vector_id, 
+            ($dotProductQuery) as similarity,
+            GROUP_CONCAT(val.vector_value ORDER BY val.element_position ASC) as vector_values
+        FROM 
+            $valuesTableName AS val
+        JOIN 
+            $metaTableName AS meta ON val.vector_id = meta.vector_id
+        WHERE 
+            val.vector_id IN ($vectorIdsPlaceholder)
+        GROUP BY 
+            meta.vector_id
+        ORDER BY 
+            similarity DESC
+        LIMIT 
+            $n
+    ";
 
-        $stmt = $mysqli->query($query);
-        if(!$stmt) {
+        $stmt = $mysqli->query($finalQuery);
+        if (!$stmt) {
             throw new \Exception($mysqli->error);
         }
 

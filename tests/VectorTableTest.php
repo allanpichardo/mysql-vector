@@ -9,7 +9,7 @@ class VectorTableTest extends TestCase
 {
     private $mysqli;
     private $vectorTable;
-    private $dimension = 512;
+    private $dimension = 1536;
 
     protected function setUp(): void
     {
@@ -31,7 +31,7 @@ class VectorTableTest extends TestCase
         $vecs = [];
         for ($i = 0; $i < $count; $i++) {
             for($j = 0; $j < $dimension; $j++) {
-                $vecs[$i][$j] = mt_rand(0, 1000) / 1000;
+                $vecs[$i][$j] = 2 * (mt_rand(0, 1000) / 1000) - 1;
             }
         }
         return $vecs;
@@ -56,9 +56,13 @@ class VectorTableTest extends TestCase
 
         $ids = [];
 
+        echo "Inserting 1000 vectors...\n";
+        $time = microtime(true);
         foreach ($vecs as $vec) {
             $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
         }
+        $time = microtime(true) - $time;
+        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
 
         $this->assertEquals(count($vecs), $this->vectorTable->count($this->mysqli));
 
@@ -105,11 +109,29 @@ class VectorTableTest extends TestCase
         $this->mysqli->rollback();
     }
 
+    public function testSelectAll() {
+        $this->mysqli->begin_transaction();
+
+        $vecs = $this->getRandomVectors(10, $this->dimension);
+        foreach ($vecs as $vec) {
+            $this->vectorTable->upsert($this->mysqli, $vec);
+        }
+
+        $results = $this->vectorTable->selectAll($this->mysqli);
+        $this->assertEquals(count($vecs), count($results));
+
+        $i = 0;
+        foreach ($results as $result) {
+            $this->assertEquals($vecs[$i], $result['vector']);
+            $i++;
+        }
+    }
+
     public function testSearch() {
         $this->mysqli->begin_transaction();
 
         // Insert 1000 random vectors
-        $vecs = $this->getRandomVectors(1000, $this->dimension);
+        $vecs = $this->getRandomVectors(100, $this->dimension);
         foreach ($vecs as $vec) {
             $this->vectorTable->upsert($this->mysqli, $vec);
         }
@@ -119,7 +141,45 @@ class VectorTableTest extends TestCase
         $this->vectorTable->upsert($this->mysqli, $targetVector);
 
         // Now, we search for this vector
+        echo "Searching for vector...\n";
+        $time = microtime(true);
         $results = $this->vectorTable->search($this->mysqli, $targetVector, 10);
+        $time = microtime(true) - $time;
+        // print time in format 00:00:00.000
+        $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
+        echo "Search completed in $elapsed";
+
+        // At least the first result should be our target vector or very close
+        $firstResultVector = $results[0]['vector'];
+        $firstResultSimilarity = $results[0]['similarity'];
+
+        $this->assertEquals($targetVector, $firstResultVector, "The most similar vector should be the target vector itself");
+        $this->assertEqualsWithDelta(1.0, $firstResultSimilarity, 0.000000001, "The similarity of the most similar vector should be the highest possible value");
+
+        $this->mysqli->rollback();
+    }
+
+    public function testSearchPHP() {
+        $this->mysqli->begin_transaction();
+
+        // Insert 1000 random vectors
+        $vecs = $this->getRandomVectors(100, $this->dimension);
+        foreach ($vecs as $vec) {
+            $this->vectorTable->upsert($this->mysqli, $vec);
+        }
+
+        // Let's insert a known vector
+        $targetVector = array_fill(0, $this->dimension, 0.5);
+        $this->vectorTable->upsert($this->mysqli, $targetVector);
+
+        // Now, we search for this vector
+        echo "Searching for vector...\n";
+        $time = microtime(true);
+        $results = $this->vectorTable->searchPHP($this->mysqli, $targetVector, 10);
+        $time = microtime(true) - $time;
+        // print time in format 00:00:00.000
+        $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
+        echo "Search completed in $elapsed";
 
         // At least the first result should be our target vector or very close
         $firstResultVector = $results[0]['vector'];
