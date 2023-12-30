@@ -6,6 +6,16 @@ use Symfony\Polyfill\Intl\Normalizer\Normalizer as IntlNormalizer;
 
 class BertNormalizer extends Normalizer
 {
+    public function __construct(array $config= [
+        'lowercase' => true,
+        'strip_accents' => false,
+        'clean_text' => true,
+        'handle_chinese_chars' => true
+    ])
+    {
+        parent::__construct($config);
+    }
+
     private function tokenizeChineseChars($text) {
         $output = '';
         for ($i = 0; $i < mb_strlen($text); ++$i) {
