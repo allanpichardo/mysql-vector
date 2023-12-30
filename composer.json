@@ -12,7 +12,16 @@
   ],
   "require": {
     "php": ">=8.0",
-    "ext-mysqli": "*"
+    "ext-mysqli": "*",
+    "bdelespierre/php-kmeans": "^2.2",
+    "ext-mbstring": "*",
+    "ext-intl": "*",
+    "symfony/polyfill-intl-normalizer": "^1.28",
+    "symfony/polyfill-mbstring": "^1.28"
+  },
+  "replace": {
+    "symfony/polyfill-intl-normalizer": "^1.28",
+    "symfony/polyfill-mbstring": "^1.28"
   },
   "autoload": {
       "psr-4": {

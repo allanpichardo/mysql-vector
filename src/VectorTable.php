@@ -39,6 +39,7 @@ class VectorTable
             "CREATE TABLE %s %s (
                 vector_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 magnitude DOUBLE NOT NULL,
+                centroid_id INT UNSIGNED,
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=%s;";
         $metaQuery = sprintf($metaQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getMetaTableName(), $this->engine);
@@ -55,6 +56,26 @@ class VectorTable
                 FOREIGN KEY (vector_id) REFERENCES vector_meta_%s(vector_id)
             ) ENGINE=%s;";
         $valuesQuery = sprintf($valuesQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getValuesTableName(), $this->name, $this->engine);
+
+        $centroidMetaQuery =
+            "CREATE TABLE %s centroids_%s (
+                centroid_id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=%s;";
+        $centroidMetaQuery = sprintf($centroidMetaQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getMetaTableName(), $this->engine);
+
+        $centroidValuesQuery =
+            "CREATE TABLE %s centroids_%s (
+                id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                centroid_id INT UNSIGNED NOT NULL,
+                element_position INT,
+                vector_value DOUBLE,
+                normalized_value DOUBLE,
+                lower_bound DOUBLE,
+                upper_bound DOUBLE,
+                FOREIGN KEY (centroid_id) REFERENCES centroids_%s(centroid_id)
+            ) ENGINE=%s;";
+        $centroidValuesQuery = sprintf($centroidValuesQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getValuesTableName(), $this->getMetaTableName(), $this->engine);
 
         $indexValuesQuery = "CREATE INDEX vector_id_index_%s ON vector_values_%s (vector_id);";
         $indexValuesQuery = sprintf($indexValuesQuery, $this->name, $this->name);
@@ -74,7 +95,7 @@ class VectorTable
         $compositeIndexQuery = "CREATE INDEX composite_index_%s ON vector_values_%s (element_position, vector_id, normalized_value);";
         $compositeIndexQuery = sprintf($compositeIndexQuery, $this->name, $this->name);
 
-        return [$metaQuery, $valuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery, $indexMetaQuery, $indexNormalizedQuery, $compositeIndexQuery];
+        return [$metaQuery, $valuesQuery, $centroidMetaQuery, $centroidValuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery, $indexMetaQuery, $indexNormalizedQuery, $compositeIndexQuery];
     }
 
     /**
@@ -99,6 +120,27 @@ class VectorTable
         $mysqli->commit();
     }
 
+    protected function generateRandomCentroids(\mysqli $mysqli, int $count = 50) {
+        $mysqli->begin_transaction();
+
+        $centroids = $this->getRandomVectors($count, $this->dimension);
+        foreach ($centroids as $centroid) {
+            $this->upsert($mysqli, $centroid, null, true);
+        }
+
+        $mysqli->commit();
+    }
+
+    private function getRandomVectors($count, $dimension) {
+        $vecs = [];
+        for ($i = 0; $i < $count; $i++) {
+            for($j = 0; $j < $dimension; $j++) {
+                $vecs[$i][$j] = 2 * (mt_rand(0, 1000) / 1000) - 1;
+            }
+        }
+        return $vecs;
+    }
+
     /**
      * Insert or update a vector
      * @param \mysqli $mysqli The mysqli connection
@@ -107,7 +149,7 @@ class VectorTable
      * @return int The ID of the inserted or updated vector
      * @throws \Exception If the vector could not be inserted or updated
      */
-    public function upsert(\mysqli $mysqli, array $vector, int $id = null): int
+    public function upsert(\mysqli $mysqli, array $vector, int $id = null, $isCentroid = false): int
     {
         if(count($vector) != $this->dimension) {
             throw new \Exception('Vector dimension does not match');
@@ -120,7 +162,7 @@ class VectorTable
 
         $vectorId = $id;
         if(empty($vectorId)) {
-            $metaTableName = $this->getMetaTableName();
+            $metaTableName = $isCentroid ? sprintf("centroids_%s", $this->getMetaTableName()) : $this->getMetaTableName();
 
             $statement = $mysqli->prepare("INSERT INTO $metaTableName (magnitude) VALUES (?)");
             $statement->bind_param('d', $magnitude);
@@ -134,7 +176,7 @@ class VectorTable
             $statement->close();
         }
 
-        $valuesTableName = $this->getValuesTableName();
+        $valuesTableName = $isCentroid ? sprintf("centroids_%s", $this->getValuesTableName()) : $this->getValuesTableName();
 
         $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?, ?, ?)'));
         $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");

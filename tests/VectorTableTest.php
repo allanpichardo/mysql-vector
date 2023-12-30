@@ -9,7 +9,7 @@ class VectorTableTest extends TestCase
 {
     private $mysqli;
     private $vectorTable;
-    private $dimension = 1536;
+    private $dimension = 2;
 
     protected function setUp(): void
     {
@@ -217,15 +217,19 @@ class VectorTableTest extends TestCase
         // Clean up the database and close connection
         $mysqli = new \mysqli('localhost', 'root', '', 'mysql-vector');
         $vectorTable = new VectorTable('test_table', 3);
-        $mysqli->query("DROP TABLE " . $vectorTable->getMetaTableName());
         $mysqli->query("DROP TABLE " . $vectorTable->getValuesTableName());
+        $mysqli->query("DROP TABLE " . $vectorTable->getMetaTableName());
+        $mysqli->query("DROP TABLE centroids_" . $vectorTable->getValuesTableName());
+        $mysqli->query("DROP TABLE centroids_" . $vectorTable->getMetaTableName());
         $mysqli->close();
     }
 
     protected function tearDown(): void
     {
-        $this->mysqli->query("DROP TABLE " . $this->vectorTable->getMetaTableName());
         $this->mysqli->query("DROP TABLE " . $this->vectorTable->getValuesTableName());
+        $this->mysqli->query("DROP TABLE " . $this->vectorTable->getMetaTableName());
+        $this->mysqli->query("DROP TABLE centroids_" . $this->vectorTable->getValuesTableName());
+        $this->mysqli->query("DROP TABLE centroids_" . $this->vectorTable->getMetaTableName());
         $this->mysqli->close();
     }
 
