@@ -43,7 +43,7 @@ class BertTokenizer
     /**
      * @var int|mixed
      */
-    private mixed $modelMaxLength;
+    public mixed $modelMaxLength;
     /**
      * @var false|mixed
      */

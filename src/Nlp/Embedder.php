@@ -13,6 +13,8 @@ class Embedder
     private Model $model;
     private BertTokenizer $tokenizer;
 
+    const QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages:";
+
     public function __construct() {
         // check if onnxruntime is installed
         ob_start();
@@ -52,7 +54,15 @@ class Embedder
      * @return array Batch of embeddings
      * @throws \Exception
      */
-    public function embed(array $text): array {
+    public function embed(array $text, bool $prependQuery = false): array {
+
+        if($prependQuery) {
+            // Add query instruction to text
+            $text = array_map(function($t) {
+                return self::QUERY_INSTRUCTION . ' ' . $t;
+            }, $text);
+        }
+
         $tokens = $this->tokenizer->call($text, [
             'text_pair' => null,
             'add_special_tokens' => true,
@@ -87,7 +97,17 @@ class Embedder
         return 1.0 - ($dotproduct / ($normA * $normB));
     }
 
+    /**
+     * Calculates the cosine similarity between two vectors.
+     * @param array $a
+     * @param array $b
+     * @return float
+     */
     public function getCosineSimilarity(array $a, array $b): float {
         return 1.0 - $this->cosine($a, $b);
+    }
+
+    public function getMaxLength(): int {
+        return $this->tokenizer->modelMaxLength;
     }
 }
