@@ -95,7 +95,10 @@ class VectorTable
         $compositeIndexQuery = "CREATE INDEX composite_index_%s ON vector_values_%s (element_position, vector_id, normalized_value);";
         $compositeIndexQuery = sprintf($compositeIndexQuery, $this->name, $this->name);
 
-        return [$metaQuery, $valuesQuery, $centroidMetaQuery, $centroidValuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery, $indexMetaQuery, $indexNormalizedQuery, $compositeIndexQuery];
+        $centroidCompositeIndexQuery = "CREATE INDEX composite_index_%s ON centroids_vector_values_%s (element_position, centroid_id, normalized_value);";
+        $centroidCompositeIndexQuery = sprintf($centroidCompositeIndexQuery, $this->name, $this->name);
+
+        return [$metaQuery, $valuesQuery, $centroidMetaQuery, $centroidValuesQuery, $indexValuesQuery, $indexPositionQuery, $uniqueConstraintQuery, $indexMetaQuery, $indexNormalizedQuery, $compositeIndexQuery, $centroidCompositeIndexQuery];
     }
 
     /**
@@ -118,6 +121,9 @@ class VectorTable
         }
 
         $mysqli->commit();
+
+        // todo: allow changing the number of centroids
+        $this->generateRandomCentroids($mysqli);
     }
 
     protected function generateRandomCentroids(\mysqli $mysqli, int $count = 50) {
@@ -151,6 +157,13 @@ class VectorTable
      */
     public function upsert(\mysqli $mysqli, array $vector, int $id = null, $isCentroid = false): int
     {
+        $centroidId = null;
+        if(!$isCentroid) {
+            // Find the closest centroid
+            $centroids = $this->search($mysqli, $vector, 1, true);
+            $centroidId = $centroids[0]['id'];
+        }
+
         if(count($vector) != $this->dimension) {
             throw new \Exception('Vector dimension does not match');
         }
@@ -164,8 +177,13 @@ class VectorTable
         if(empty($vectorId)) {
             $metaTableName = $isCentroid ? sprintf("centroids_%s", $this->getMetaTableName()) : $this->getMetaTableName();
 
-            $statement = $mysqli->prepare("INSERT INTO $metaTableName (magnitude) VALUES (?)");
-            $statement->bind_param('d', $magnitude);
+            if(!$isCentroid) {
+                $statement = $mysqli->prepare("INSERT INTO $metaTableName (magnitude, centroid_id) VALUES (?, ?)");
+                $statement->bind_param('di', $magnitude, $centroidId);
+            } else {
+                $statement = $mysqli->prepare("INSERT INTO $metaTableName VALUES ()");
+            }
+
             $success = $statement->execute();
 
             if (!$success) {
@@ -179,7 +197,12 @@ class VectorTable
         $valuesTableName = $isCentroid ? sprintf("centroids_%s", $this->getValuesTableName()) : $this->getValuesTableName();
 
         $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?, ?, ?)'));
-        $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+        if(!$isCentroid) {
+            $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+        } else {
+            $statement = $mysqli->prepare("INSERT INTO $valuesTableName (centroid_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+        }
+
         if(!$statement) {
             throw new \Exception($mysqli->error);
         }
@@ -478,32 +501,44 @@ class VectorTable
      * @return array Array of results containing the id, similarity, and vector
      * @throws \Exception
      */
-    public function search(\mysqli $mysqli, array $vector, int $n = 10): array {
-        $valuesTableName = $this->getValuesTableName();
-        $metaTableName = $this->getMetaTableName();
+    public function search(\mysqli $mysqli, array $vector, int $n = 10, bool $isCentroid = false): array {
+
+        if(!$isCentroid) {
+            // Find the closest centroid
+            $centroids = $this->search($mysqli, $vector, 1, true);
+            $centroidId = $centroids[0]['id'];
+        }
+
+        $valuesTableName = $isCentroid ? 'centroids_' . $this->getValuesTableName() : $this->getValuesTableName();
+        $metaTableName = $isCentroid ? 'centroids_' . $this->getMetaTableName() : $this->getMetaTableName();
 
         // Normalize the input vector
         $normalizedVector = $this->normalize($vector);
 
-        // Generate bounding box query conditions
-        $boundingBoxConditions = [];
-        $boundingBox = $this->getBoundingBox($vector);
-        $lowerBound = $boundingBox[0];
-        $upperBound = $boundingBox[1];
-        foreach ($normalizedVector as $position => $value) {
-            $boundingBoxConditions[] = "(element_position = $position AND normalized_value BETWEEN {$lowerBound[$position]} AND {$upperBound[$position]})";
-        }
-        $boundingBoxQuery = implode(' OR ', $boundingBoxConditions);
+        if($isCentroid || empty($centroidId)) {
+            // Generate bounding box query conditions
+            $boundingBoxConditions = [];
+            $boundingBox = $this->getBoundingBox($vector);
+            $lowerBound = $boundingBox[0];
+            $upperBound = $boundingBox[1];
+            foreach ($normalizedVector as $position => $value) {
+                $boundingBoxConditions[] = "(element_position = $position AND normalized_value BETWEEN {$lowerBound[$position]} AND {$upperBound[$position]})";
+            }
+            $boundingBoxQuery = implode(' OR ', $boundingBoxConditions);
 
-        $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
+            $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
 
-        // Retrieve vector_ids satisfying the bounding box condition
-        $vectorIdsQuery = "
-        SELECT DISTINCT vector_id 
+            // Retrieve vector_ids satisfying the bounding box condition
+            $vectorIdsQuery = sprintf("
+        SELECT DISTINCT %s 
         FROM $valuesTableName
         USE INDEX (composite_index_{$this->name})
         WHERE $boundingBoxQuery
-    ";
+    ", $isCentroid ? 'centroid_id' : 'vector_id');
+        } else {
+            $vectorIdsQuery = "SELECT DISTINCT vector_id FROM $metaTableName WHERE centroid_id = $centroidId";
+        }
+
         $vectorIdsResult = $mysqli->query($vectorIdsQuery);
         if (!$vectorIdsResult) {
             throw new \Exception($mysqli->error);
@@ -511,7 +546,7 @@ class VectorTable
 
         $vectorIds = [];
         while ($row = $vectorIdsResult->fetch_assoc()) {
-            $vectorIds[] = $row['vector_id'];
+            $vectorIds[] = $isCentroid ? $row['centroid_id'] : $row['vector_id'];
         }
 
         // If no vector_ids satisfy the bounding box condition, return empty result
@@ -528,24 +563,28 @@ class VectorTable
 
         $vectorIdsPlaceholder = implode(', ', $vectorIds);
 
-        $finalQuery = "
+        $finalQuery = sprintf("
         SELECT 
-            meta.vector_id, 
+            meta.%s, 
             ($dotProductQuery) as similarity,
             GROUP_CONCAT(val.vector_value ORDER BY val.element_position ASC) as vector_values
         FROM 
             $valuesTableName AS val
         JOIN 
-            $metaTableName AS meta ON val.vector_id = meta.vector_id
+            $metaTableName AS meta ON val.%s = meta.%s
         WHERE 
-            val.vector_id IN ($vectorIdsPlaceholder)
+            val.%s IN ($vectorIdsPlaceholder)
         GROUP BY 
-            meta.vector_id
+            meta.%s
         ORDER BY 
             similarity DESC
         LIMIT 
             $n
-    ";
+    ", $isCentroid ? 'centroid_id' : 'vector_id',
+            $isCentroid ? 'centroid_id' : 'vector_id',
+            $isCentroid ? 'centroid_id' : 'vector_id',
+            $isCentroid ? 'centroid_id' : 'vector_id',
+            $isCentroid ? 'centroid_id' : 'vector_id');
 
         $stmt = $mysqli->query($finalQuery);
         if (!$stmt) {
@@ -555,7 +594,7 @@ class VectorTable
         $results = [];
         while ($row = $stmt->fetch_assoc()) {
             $results[] = [
-                'id' => $row['vector_id'],
+                'id' => $isCentroid ? $row['centroid_id'] : $row['vector_id'],
                 'similarity' => (double)$row['similarity'],
                 'vector' => array_map('floatval', explode(',', $row['vector_values']))
             ];
