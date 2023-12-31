@@ -16,7 +16,7 @@ class VectorTable
      * @param float $pruningThreshold Threshold for bounding box pruning. This value must be consistent across your dataset and can't be changed once set. Lower values will result in more pruning. Default is 0.7.
      * @param string $engine
      */
-    public function __construct(string $name, int $dimension, float $pruningThreshold = 0.7, string $engine = 'InnoDB')
+    public function __construct(string $name, int $dimension = 384, float $pruningThreshold = 0.7, string $engine = 'InnoDB')
     {
         $this->name = $name;
         $this->dimension = $dimension;
