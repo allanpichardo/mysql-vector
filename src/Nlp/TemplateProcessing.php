@@ -25,7 +25,7 @@ class TemplateProcessing extends PostProcessor
      */
     public function postProcess(array $tokens, ...$args): array {
         $tokensPair = $args[0] ?? null;
-        $type = is_null($tokensPair) ? $this->single : $this->pair;
+        $type = empty($tokensPair) ? $this->single : $this->pair;
 
         $toReturn = [];
         foreach ($type as $item) {

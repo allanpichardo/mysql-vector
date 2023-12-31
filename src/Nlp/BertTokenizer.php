@@ -86,12 +86,12 @@ class BertTokenizer
             $token = new AddedToken($addedToken);
             $this->addedTokens[] = $token;
 
-            $this->model->tokensToIds[$token['content']] = $token['id'];
-            $this->model->vocab[$token['id']] = $token['content'];
+            $this->model->tokensToIds[$token->content] = $token->id;
+            $this->model->vocab[$token->id] = $token->content;
 
             if($token->special) {
-                $this->specialTokens[] = $token['content'];
-                $this->allSpecialIds[] = $token['id'];
+                $this->specialTokens[] = $token->content;
+                $this->allSpecialIds[] = $token->id;
             }
         }
 
@@ -113,9 +113,9 @@ class BertTokenizer
 
         if (count($this->addedTokens) > 0) {
             $regexParts = array_map(function ($token) {
-                $lstrip = $token['lstrip'] ? '\\s*' : '';
-                $rstrip = $token['rstrip'] ? '\\s*' : '';
-                $content = preg_quote($token['content'], '/');
+                $lstrip = $token->lstrip ? '\\s*' : '';
+                $rstrip = $token->rstrip ? '\\s*' : '';
+                $content = preg_quote($token->content, '/');
 
                 return $lstrip . '(' . $content . ')' . $rstrip;
             }, $this->addedTokens);
@@ -158,13 +158,14 @@ class BertTokenizer
      * @return mixed|null The value of the first matching key, or null if no key is found.
      * @throws \Exception If an object is found for a matching key and its __type property is not 'AddedToken'.
      */
-    public function getToken(...$keys) {
+    public function getToken(...$keys): mixed
+    {
         foreach ($keys as $key) {
-            if (!isset($this->_tokenizerConfig[$key])) {
+            if (!isset($this->tokenizerConfig[$key])) {
                 continue;
             }
 
-            $item = $this->_tokenizerConfig[$key];
+            $item = $this->tokenizerConfig[$key];
 
             if (is_array($item)) {
                 if (isset($item['__type']) && $item['__type'] === 'AddedToken') {
@@ -216,14 +217,15 @@ class BertTokenizer
         return $inputs;
     }
 
-    private function call(string|array $text, array $options = [
+    public function call(string|array $text, array $options = [
         'text_pair' => null,
         'add_special_tokens' => true,
         'padding' => false,
         'truncation' => null,
         'max_length' => null,
-        'return_tensor' => true, // Different to HF
-    ]) {
+        'return_tensor' => false, // Different to HF
+    ]): array
+    {
         $textPair = $options['text_pair'] ?? null;
         $addSpecialTokens = $options['add_special_tokens'] ?? true;
         $padding = $options['padding'] ?? false;
@@ -269,7 +271,7 @@ class BertTokenizer
             if($padding === 'max_length') {
                 $maxLength = $this->modelMaxLength;
             } else {
-                $maxLength = max(array_map(function($x) { return strlen($x); }, $tokens));
+                $maxLength = max(array_map(function($x) { return count($x); }, $tokens));
             }
         }
 
@@ -278,34 +280,39 @@ class BertTokenizer
         $attentionMask = [];
         if ($padding || $truncation) {
             for ($i = 0; $i < count($tokens); ++$i) {
-                if (strlen($tokens[$i]) === $maxLength) {
-                    $attentionMask[] = array_fill(0, strlen($tokens[$i]), 1);
-                } elseif (strlen($tokens[$i]) > $maxLength) {
+                if (count($tokens[$i]) === $maxLength) {
+                    $attentionMask[] = array_fill(0, count($tokens[$i]), 1);
+                } elseif (count($tokens[$i]) > $maxLength) {
                     // Possibly truncate
                     if ($truncation) {
                         $tokens[$i] = substr($tokens[$i], 0, $maxLength);
                     }
-                    $attentionMask[] = array_fill(0, strlen($tokens[$i]), 1);
+                    $attentionMask[] = array_fill(0, count($tokens[$i]), 1);
                 } else {
                     // Token length < max_length
-                    $diff = $maxLength - strlen($tokens[$i]);
+                    $diff = $maxLength - count($tokens[$i]);
                     if ($padding) {
                         if ($this->paddingSide === 'right') {
-                            $attentionMask[] = array_merge(array_fill(0, strlen($tokens[$i]), 1), array_fill(0, $diff, 0));
-                            $tokens[$i] .= str_repeat($this->padTokenId, $diff);
+                            $attentionMask[] = array_merge(array_fill(0, count($tokens[$i]), 1), array_fill(0, $diff, 0));
+                            for ($j = 0; $j < $diff; $j++) {
+                                $tokens[$i][] = $this->padTokenId;
+                            }
                         } else {
                             // Padding on the left
-                            $attentionMask[] = array_merge(array_fill(0, $diff, 0), array_fill(0, strlen($tokens[$i]), 1));
-                            $tokens[$i] = str_repeat($this->padTokenId, $diff) . $tokens[$i];
+                            $attentionMask[] = array_merge(array_fill(0, $diff, 0), array_fill(0, count($tokens[$i]), 1));
+                            $paddingTokens = array_fill(0, $diff, $this->padTokenId);
+                            foreach ($paddingTokens as $paddingToken) {
+                                array_unshift($tokens[$i], $paddingToken);
+                            }
                         }
                     } else {
-                        $attentionMask[] = array_fill(0, strlen($tokens[$i]), 1);
+                        $attentionMask[] = array_fill(0, count($tokens[$i]), 1);
                     }
                 }
             }
         } else {
             foreach ($tokens as $token) {
-                $attentionMask[] = array_fill(0, strlen($token), 1);
+                $attentionMask[] = array_fill(0, count($token), 1);
             }
         }
 
@@ -326,6 +333,28 @@ class BertTokenizer
     }
 
     /**
+     * Helper function to remove accents from a string.
+     *
+     * @param string $text The text to remove accents from.
+     * @return string The text with accents removed.
+     */
+    private function removeAccents(string $text): string
+    {
+        return iconv('UTF-8', 'ASCII//TRANSLIT', $text);
+    }
+
+    /**
+     * Helper function to lowercase a string and remove accents.
+     *
+     * @param string $text The text to lowercase and remove accents from.
+     * @return string The lowercased text with accents removed.
+     */
+    private function lowercaseAndRemoveAccent(string $text): string
+    {
+        return $this->removeAccents(mb_strtolower($text, 'UTF-8'));
+    }
+
+    /**
      * Encodes a single text using the preprocessor pipeline of the tokenizer
      * @param $text string|null the text to encode
      * @return array|null the encoded tokens
@@ -340,8 +369,11 @@ class BertTokenizer
 
         $tokens = [];
         foreach ($sections as $sectionIndex => $x) {
-            $addedToken = $this->findAddedToken($x); // Implement findAddedToken to check if $x is an added token
-            if ($addedToken !== null) {
+            $postFilter = array_filter($this->addedTokens, function($t) use ($x) {
+                return $t->content === $x;
+            });
+            $addedToken = reset($postFilter);
+            if (!empty($addedToken)) {
                 $tokens[] = $x;
             } else {
                 // Process the section
@@ -378,7 +410,7 @@ class BertTokenizer
         $addSpecialTokens = $options['add_special_tokens'] ?? true;
 
         $tokens = $this->encodeText($text);
-        $tokens2 = $textPair !== null ? $this->encodeText($textPair) : [];
+        $tokens2 = !empty($textPair) ? $this->encodeText($textPair) : [];
 
         // TODO: Improve `add_special_tokens` and ensure correctness
         $combinedTokens = ($this->postProcessor !== null && $addSpecialTokens)

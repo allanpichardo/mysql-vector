@@ -2,9 +2,7 @@
 
 namespace MHz\MysqlVector\Nlp;
 
-use Symfony\Polyfill\Intl\Normalizer\Normalizer as IntlNormalizer;
-
-class BertNormalizer extends Normalizer
+class BertNormalizer extends TextNormalizer
 {
     public function __construct(array $config= [
         'lowercase' => true,
@@ -47,7 +45,7 @@ class BertNormalizer extends Normalizer
 
     private function stripAccents($text): string {
         // Normalize the text to decompose the accents
-        $normalized = IntlNormalizer::normalize($text, IntlNormalizer::FORM_D);
+        $normalized = \Normalizer::normalize($text, \Normalizer::FORM_D);
 
         // Remove the accents using a regex and return the result
         return preg_replace('/\p{Mn}/u', '', $normalized);

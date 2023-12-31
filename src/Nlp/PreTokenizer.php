@@ -29,14 +29,20 @@ class PreTokenizer
      */
     public function preTokenize(string|array $text, array $options = []): array {
         $result = [];
-        if(is_array($text)) {
-            foreach ($text as $x) {
-                $result[] = $this->preTokenizeText($x, $options);
+
+        if (is_array($text)) {
+            foreach ($text as $item) {
+                $result[] = $this->preTokenizeText($item, $options);
             }
         } else {
             $result = $this->preTokenizeText($text, $options);
         }
 
-        return array_merge(...$result);
+        // Flatten the result if it's an array of arrays
+        if (count($result) > 0 && is_array($result[0])) {
+            $result = array_merge(...$result);
+        }
+
+        return $result;
     }
 }

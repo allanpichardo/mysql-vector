@@ -19,12 +19,16 @@
     "symfony/polyfill-intl-normalizer": "^1.28",
     "symfony/polyfill-mbstring": "^1.28",
     "ext-ctype": "*",
-    "symfony/polyfill-ctype": "^1.28"
+    "symfony/polyfill-ctype": "^1.28",
+    "ext-iconv": "*",
+    "symfony/polyfill-iconv": "^1.28",
+    "ankane/onnxruntime": "^0.1.7"
   },
   "replace": {
     "symfony/polyfill-intl-normalizer": "^1.28",
     "symfony/polyfill-mbstring": "^1.28",
-    "symfony/polyfill-ctype": "^1.28"
+    "symfony/polyfill-ctype": "^1.28",
+    "symfony/polyfill-iconv": "^1.28"
   },
   "autoload": {
       "psr-4": {
