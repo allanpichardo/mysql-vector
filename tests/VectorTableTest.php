@@ -9,7 +9,9 @@ class VectorTableTest extends TestCase
 {
     private $mysqli;
     private $vectorTable;
-    private $dimension = 2;
+    private $dimension = 384;
+    private $centroids = 20;
+    private $testVectorAmount = 10000;
 
     protected function setUp(): void
     {
@@ -21,7 +23,7 @@ class VectorTableTest extends TestCase
         }
 
         // Setup VectorTable for testing
-        $this->vectorTable = new VectorTable('test_table', $this->dimension);
+        $this->vectorTable = new VectorTable('test_table', $this->dimension, $this->centroids);
 
         // Create required tables for testing
         $this->vectorTable->initialize($this->mysqli);
@@ -49,14 +51,14 @@ class VectorTableTest extends TestCase
         $this->assertEquals('vector_values_test_table', $valuesTableName);
     }
 
-    public function testUpsert() {
+    public function testUpsertSingle() {
         $this->mysqli->begin_transaction();
 
-        $vecs = $this->getRandomVectors(1000, $this->dimension);
+        $vecs = $this->getRandomVectors(1, $this->dimension);
 
         $ids = [];
 
-        echo "Inserting 1000 vectors...\n";
+        echo "Inserting 1 vector...\n";
         $time = microtime(true);
         foreach ($vecs as $vec) {
             $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
@@ -65,7 +67,26 @@ class VectorTableTest extends TestCase
         echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
 
         $this->assertEquals(count($vecs), $this->vectorTable->count($this->mysqli));
+        $this->mysqli->commit();
+        echo "wait";
+    }
 
+    public function testUpsert() {
+        $this->mysqli->begin_transaction();
+
+        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
+
+        $ids = [];
+
+        echo "Inserting $this->testVectorAmount vectors...\n";
+        $time = microtime(true);
+        foreach ($vecs as $vec) {
+            $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
+        }
+        $time = microtime(true) - $time;
+        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
+
+        $this->assertEquals(count($vecs), $this->vectorTable->count($this->mysqli));
         $results = $this->vectorTable->select($this->mysqli, $ids);
         $i = 0;
         foreach ($results as $result) {
@@ -130,8 +151,8 @@ class VectorTableTest extends TestCase
     public function testSearch() {
         $this->mysqli->begin_transaction();
 
-        // Insert 1000 random vectors
-        $vecs = $this->getRandomVectors(100, $this->dimension);
+        // Insert $this->testVectorAmount random vectors
+        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
         foreach ($vecs as $vec) {
             $this->vectorTable->upsert($this->mysqli, $vec);
         }
@@ -159,44 +180,12 @@ class VectorTableTest extends TestCase
         $this->mysqli->rollback();
     }
 
-    public function testSearchPHP() {
-        $this->mysqli->begin_transaction();
-
-        // Insert 1000 random vectors
-        $vecs = $this->getRandomVectors(100, $this->dimension);
-        foreach ($vecs as $vec) {
-            $this->vectorTable->upsert($this->mysqli, $vec);
-        }
-
-        // Let's insert a known vector
-        $targetVector = array_fill(0, $this->dimension, 0.5);
-        $this->vectorTable->upsert($this->mysqli, $targetVector);
-
-        // Now, we search for this vector
-        echo "Searching for vector...\n";
-        $time = microtime(true);
-        $results = $this->vectorTable->searchPHP($this->mysqli, $targetVector, 10);
-        $time = microtime(true) - $time;
-        // print time in format 00:00:00.000
-        $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
-        echo "Search completed in $elapsed";
-
-        // At least the first result should be our target vector or very close
-        $firstResultVector = $results[0]['vector'];
-        $firstResultSimilarity = $results[0]['similarity'];
-
-        $this->assertEquals($targetVector, $firstResultVector, "The most similar vector should be the target vector itself");
-        $this->assertEqualsWithDelta(1.0, $firstResultSimilarity, 0.000000001, "The similarity of the most similar vector should be the highest possible value");
-
-        $this->mysqli->rollback();
-    }
-
     public function testDelete(): void {
         $this->mysqli->begin_transaction();
 
         $ids = [];
-        // Insert 1000 random vectors
-        $vecs = $this->getRandomVectors(1000, $this->dimension);
+        // Insert $this->testVectorAmount random vectors
+        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
         foreach ($vecs as $vec) {
             $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
         }

@@ -8,6 +8,8 @@ class VectorTable
     private int $dimension;
     private string $engine;
     private float $pruningThreshold;
+    private int $centroids;
+    private array $centroidCache;
 
     /**
      * Instantiate a new VectorTable object.
@@ -16,12 +18,14 @@ class VectorTable
      * @param float $pruningThreshold Threshold for bounding box pruning. This value must be consistent across your dataset and can't be changed once set. Lower values will result in more pruning. Default is 0.7.
      * @param string $engine
      */
-    public function __construct(string $name, int $dimension = 384, float $pruningThreshold = 0.7, string $engine = 'InnoDB')
+    public function __construct(string $name, int $dimension = 384, int $centroids = 10, float $pruningThreshold = 0.7, string $engine = 'InnoDB')
     {
         $this->name = $name;
         $this->dimension = $dimension;
         $this->engine = $engine;
         $this->pruningThreshold = $pruningThreshold;
+        $this->centroids = $centroids;
+        $this->centroidCache = [];
     }
 
     public function getMetaTableName(): string
@@ -51,8 +55,6 @@ class VectorTable
                 element_position INT,
                 vector_value DOUBLE,
                 normalized_value DOUBLE,
-                lower_bound DOUBLE,
-                upper_bound DOUBLE,
                 FOREIGN KEY (vector_id) REFERENCES vector_meta_%s(vector_id)
             ) ENGINE=%s;";
         $valuesQuery = sprintf($valuesQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getValuesTableName(), $this->name, $this->engine);
@@ -71,8 +73,6 @@ class VectorTable
                 element_position INT,
                 vector_value DOUBLE,
                 normalized_value DOUBLE,
-                lower_bound DOUBLE,
-                upper_bound DOUBLE,
                 FOREIGN KEY (centroid_id) REFERENCES centroids_%s(centroid_id)
             ) ENGINE=%s;";
         $centroidValuesQuery = sprintf($centroidValuesQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getValuesTableName(), $this->getMetaTableName(), $this->engine);
@@ -123,7 +123,7 @@ class VectorTable
         $mysqli->commit();
 
         // todo: allow changing the number of centroids
-        $this->generateRandomCentroids($mysqli);
+        $this->generateRandomCentroids($mysqli, $this->centroids);
     }
 
     protected function generateRandomCentroids(\mysqli $mysqli, int $count = 50) {
@@ -135,13 +135,15 @@ class VectorTable
         }
 
         $mysqli->commit();
+
+        $this->centroidCache = $this->selectAll($mysqli, true);
     }
 
     private function getRandomVectors($count, $dimension) {
         $vecs = [];
         for ($i = 0; $i < $count; $i++) {
             for($j = 0; $j < $dimension; $j++) {
-                $vecs[$i][$j] = 2 * (mt_rand(0, 1000) / 1000) - 1;
+                $vecs[$i][$j] = 2 * (mt_rand() / mt_getrandmax()) - 1;
             }
         }
         return $vecs;
@@ -157,21 +159,32 @@ class VectorTable
      */
     public function upsert(\mysqli $mysqli, array $vector, int $id = null, $isCentroid = false): int
     {
-        $centroidId = null;
+        $magnitude = $this->getMagnitude($vector);
+
+        $centroidId = 1;
         if(!$isCentroid) {
             // Find the closest centroid
-            $centroids = $this->search($mysqli, $vector, 1, true);
-            $centroidId = $centroids[0]['id'];
+            if(empty($this->centroidCache)) {
+                $this->centroidCache = $this->selectAll($mysqli, true);
+            }
+
+            $nearest = null;
+            foreach ($this->centroidCache as $cid => $centroid) {
+                $dotProduct = $this->dotProduct(array_map(function($x) use ($magnitude) {return $x/$magnitude;}, $vector), $centroid['normalized_vector']);
+                if ($nearest === null || $dotProduct > $nearest['similarity']) {
+                    $nearest = [
+                        'id' => $cid,
+                        'similarity' => $dotProduct
+                    ];
+                }
+            }
+
+            $centroidId = $nearest['id'];
         }
 
         if(count($vector) != $this->dimension) {
             throw new \Exception('Vector dimension does not match');
         }
-
-        $magnitude = $this->getMagnitude($vector);
-        $boundingBox = $this->getBoundingBox($vector, $this->pruningThreshold);
-        $lowerBound = $boundingBox[0];
-        $upperBound = $boundingBox[1];
 
         $vectorId = $id;
         if(empty($vectorId)) {
@@ -196,11 +209,11 @@ class VectorTable
 
         $valuesTableName = $isCentroid ? sprintf("centroids_%s", $this->getValuesTableName()) : $this->getValuesTableName();
 
-        $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?, ?, ?)'));
+        $placeholders = implode(', ', array_fill(0, count($vector), '(?, ?, ?, ?)'));
         if(!$isCentroid) {
-            $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+            $statement = $mysqli->prepare("INSERT INTO $valuesTableName (vector_id, element_position, vector_value, normalized_value) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
         } else {
-            $statement = $mysqli->prepare("INSERT INTO $valuesTableName (centroid_id, element_position, vector_value, normalized_value, lower_bound, upper_bound) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
+            $statement = $mysqli->prepare("INSERT INTO $valuesTableName (centroid_id, element_position, vector_value, normalized_value) VALUES $placeholders ON DUPLICATE KEY UPDATE vector_value = VALUES(vector_value), normalized_value = VALUES(normalized_value)");
         }
 
         if(!$statement) {
@@ -214,9 +227,7 @@ class VectorTable
             $bindParams[] = $position;
             $bindParams[] = $vector[$position];
             $bindParams[] = $vector[$position] / $magnitude;
-            $bindParams[] = $lowerBound[$position];
-            $bindParams[] = $upperBound[$position];
-            $types .= 'iidddd';
+            $types .= 'iidd';
         }
         $refs = [];
         foreach ($bindParams as $key => $value) {
@@ -312,10 +323,11 @@ class VectorTable
         return $result;
     }
 
-    public function selectAll(\mysqli $mysqli): array {
-        $valuesTableName = $this->getValuesTableName();
+    public function selectAll(\mysqli $mysqli, bool $isCentroid = false): array {
+        $idName = $isCentroid ? 'centroid_id' : 'vector_id';
+        $valuesTableName = $isCentroid ? 'centroids_' . $this->getValuesTableName() : $this->getValuesTableName();
 
-        $statement = $mysqli->prepare("SELECT vector_id, element_position, vector_value, normalized_value FROM $valuesTableName");
+        $statement = $mysqli->prepare("SELECT $idName, element_position, vector_value, normalized_value FROM $valuesTableName");
         $statement->execute();
         $statement->bind_result($vectorId, $position, $value, $normalizedValue);
 
@@ -515,44 +527,7 @@ class VectorTable
         // Normalize the input vector
         $normalizedVector = $this->normalize($vector);
 
-        if($isCentroid || empty($centroidId)) {
-            // Generate bounding box query conditions
-            $boundingBoxConditions = [];
-            $boundingBox = $this->getBoundingBox($vector);
-            $lowerBound = $boundingBox[0];
-            $upperBound = $boundingBox[1];
-            foreach ($normalizedVector as $position => $value) {
-                $boundingBoxConditions[] = "(element_position = $position AND normalized_value BETWEEN {$lowerBound[$position]} AND {$upperBound[$position]})";
-            }
-            $boundingBoxQuery = implode(' OR ', $boundingBoxConditions);
-
-            $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
-
-            // Retrieve vector_ids satisfying the bounding box condition
-            $vectorIdsQuery = sprintf("
-        SELECT DISTINCT %s 
-        FROM $valuesTableName
-        USE INDEX (composite_index_{$this->name})
-        WHERE $boundingBoxQuery
-    ", $isCentroid ? 'centroid_id' : 'vector_id');
-        } else {
-            $vectorIdsQuery = "SELECT DISTINCT vector_id FROM $metaTableName WHERE centroid_id = $centroidId";
-        }
-
-        $vectorIdsResult = $mysqli->query($vectorIdsQuery);
-        if (!$vectorIdsResult) {
-            throw new \Exception($mysqli->error);
-        }
-
-        $vectorIds = [];
-        while ($row = $vectorIdsResult->fetch_assoc()) {
-            $vectorIds[] = $isCentroid ? $row['centroid_id'] : $row['vector_id'];
-        }
-
-        // If no vector_ids satisfy the bounding box condition, return empty result
-        if (empty($vectorIds)) {
-            return [];
-        }
+        $mysqli->query("SET SESSION group_concat_max_len = 1000000;");
 
         // Calculate dot products for these vector_ids
         $dotProducts = [];
@@ -561,7 +536,10 @@ class VectorTable
         }
         $dotProductQuery = implode(' + ', $dotProducts);
 
-        $vectorIdsPlaceholder = implode(', ', $vectorIds);
+        $whereClause = '';
+        if(!$isCentroid) {
+            $whereClause = "WHERE centroid_id = $centroidId";
+        }
 
         $finalQuery = sprintf("
         SELECT 
@@ -572,8 +550,7 @@ class VectorTable
             $valuesTableName AS val
         JOIN 
             $metaTableName AS meta ON val.%s = meta.%s
-        WHERE 
-            val.%s IN ($vectorIdsPlaceholder)
+        %s
         GROUP BY 
             meta.%s
         ORDER BY 
@@ -583,7 +560,7 @@ class VectorTable
     ", $isCentroid ? 'centroid_id' : 'vector_id',
             $isCentroid ? 'centroid_id' : 'vector_id',
             $isCentroid ? 'centroid_id' : 'vector_id',
-            $isCentroid ? 'centroid_id' : 'vector_id',
+            $whereClause,
             $isCentroid ? 'centroid_id' : 'vector_id');
 
         $stmt = $mysqli->query($finalQuery);
