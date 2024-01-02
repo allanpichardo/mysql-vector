@@ -355,14 +355,13 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
 
     /**
      * Remove a vector from the database
-     * @param \mysqli $mysqli The mysqli connection
      * @param int $id The id of the vector to remove
      * @return void
      * @throws \Exception
      */
-    public function delete(\mysqli $mysqli, int $id): void {
+    public function delete(int $id): void {
         $tableName = $this->getVectorTableName();
-        $statement = $mysqli->prepare("DELETE FROM $tableName WHERE id = ?");
+        $statement = $this->mysqli->prepare("DELETE FROM $tableName WHERE id = ?");
         $statement->bind_param('i', $id);
         $success = $statement->execute();
         if(!$success) {

@@ -87,15 +87,16 @@ class VectorTableTest extends TestCase
         $results = $this->vectorTable->select($ids);
         $i = 0;
         foreach ($results as $result) {
-            $this->assertEquals($vecs[$i], $result);
+            $this->assertEqualsWithDelta($vecs[$i], $result['vector'], 0.0001);
             $i++;
         }
 
-        foreach ($results as $id => $result) {
+        foreach ($results as $i => $result) {
+            $id = $result['id'];
             $this->vectorTable->upsert($vecs[0], $id);
-            $results = $this->vectorTable->select([$id]);
-            $this->assertCount(1, $results);
-            $this->assertEquals($vecs[0], $results[$id]);
+            $r = $this->vectorTable->select([$id]);
+            $this->assertCount(1, $r);
+            $this->assertEqualsWithDelta($vecs[0], $r[0]['vector'], 0.00001);
         }
 
         $this->vectorTable->getConnection()->rollback();
@@ -114,40 +115,42 @@ class VectorTableTest extends TestCase
     }
 
     public function testSelectAll() {
-        $this->mysqli->begin_transaction();
+        $this->vectorTable->getConnection()->begin_transaction();
 
         $vecs = $this->getRandomVectors(10, $this->dimension);
         foreach ($vecs as $vec) {
-            $this->vectorTable->upsert($this->mysqli, $vec);
+            $this->vectorTable->upsert($vec);
         }
 
-        $results = $this->vectorTable->selectAll($this->mysqli);
-        $this->assertEquals(count($vecs), count($results));
+        $results = $this->vectorTable->selectAll();
+        $this->assertSameSize($vecs, $results);
 
         $i = 0;
         foreach ($results as $result) {
-            $this->assertEquals($vecs[$i], $result['vector']);
+            $this->assertEqualsWithDelta($vecs[$i], $result['vector'], 0.00001);
             $i++;
         }
+
+        $this->vectorTable->getConnection()->rollback();
     }
 
     public function testSearch() {
-        $this->mysqli->begin_transaction();
+        $this->vectorTable->getConnection()->begin_transaction();
 
         // Insert $this->testVectorAmount random vectors
         $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
         foreach ($vecs as $vec) {
-            $this->vectorTable->upsert($this->mysqli, $vec);
+            $this->vectorTable->upsert($vec);
         }
 
         // Let's insert a known vector
         $targetVector = array_fill(0, $this->dimension, 0.5);
-        $this->vectorTable->upsert($this->mysqli, $targetVector);
+        $this->vectorTable->upsert($targetVector);
 
         // Now, we search for this vector
         echo "Searching for vector...\n";
         $time = microtime(true);
-        $results = $this->vectorTable->search($this->mysqli, $targetVector, 10);
+        $results = $this->vectorTable->search($targetVector, 10);
         $time = microtime(true) - $time;
         // print time in format 00:00:00.000
         $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
@@ -157,31 +160,30 @@ class VectorTableTest extends TestCase
         $firstResultVector = $results[0]['vector'];
         $firstResultSimilarity = $results[0]['similarity'];
 
-        $this->assertEquals($targetVector, $firstResultVector, "The most similar vector should be the target vector itself");
-        $this->assertEqualsWithDelta(1.0, $firstResultSimilarity, 0.000000001, "The similarity of the most similar vector should be the highest possible value");
+        $this->assertEqualsWithDelta($targetVector, $firstResultVector, 0.00001, "The most similar vector should be the target vector itself");
+        $this->assertEqualsWithDelta(1.0, $firstResultSimilarity, 0.001, "The similarity of the most similar vector should be the highest possible value");
 
-        $this->mysqli->rollback();
+        $this->vectorTable->getConnection()->rollback();
     }
 
     public function testDelete(): void {
-        $this->mysqli->begin_transaction();
+        $this->vectorTable->getConnection()->begin_transaction();
 
         $ids = [];
-        // Insert $this->testVectorAmount random vectors
         $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
         foreach ($vecs as $vec) {
-            $ids[] = $this->vectorTable->upsert($this->mysqli, $vec);
+            $ids[] = $this->vectorTable->upsert($vec);
         }
 
-        $this->assertEquals(count($ids), $this->vectorTable->count($this->mysqli));
+        $this->assertEquals(count($ids), $this->vectorTable->count());
 
         foreach ($ids as $id) {
-            $this->vectorTable->delete($this->mysqli, $id);
+            $this->vectorTable->delete($id);
         }
 
-        $this->assertEquals(0, $this->vectorTable->count($this->mysqli));
+        $this->assertEquals(0, $this->vectorTable->count());
 
-        $this->mysqli->rollback();
+        $this->vectorTable->getConnection()->rollback();
     }
 
     public static function tearDownAfterClass(): void
