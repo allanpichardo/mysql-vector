@@ -7,7 +7,7 @@ The `VectorTable` class is a PHP implementation designed to facilitate the stora
 - Store vectors in a MySQL database using JSON data types.
 - Calculate cosine similarity between vectors using a custom MySQL function.
 - Normalize vectors and handle vector operations such as insertion, deletion, and searching.
-- Support for handling vector centroids for optimized search operations.
+- Support for vector quantization for optimized search operations.
 
 ## Requirements
 - PHP 8.0 or higher.

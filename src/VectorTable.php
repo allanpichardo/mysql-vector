@@ -2,6 +2,8 @@
 
 namespace MHz\MysqlVector;
 
+use KMeans\Space;
+
 class VectorTable
 {
     private string $name;
@@ -12,6 +14,7 @@ class VectorTable
 
     const SQL_COSIM_FUNCTION = "
 CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLARE sim FLOAT DEFAULT 0; DECLARE i INT DEFAULT 0; DECLARE len INT DEFAULT JSON_LENGTH(v1); IF JSON_LENGTH(v1) != JSON_LENGTH(v2) THEN RETURN NULL; END IF; WHILE i < len DO SET sim = sim + (JSON_EXTRACT(v1, CONCAT('$[', i, ']')) * JSON_EXTRACT(v2, CONCAT('$[', i, ']'))); SET i = i + 1; END WHILE; RETURN sim; END";
+    private int $quantizationSampleSize;
 
     /**
      * Instantiate a new VectorTable object.
@@ -27,6 +30,7 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         $this->name = $name;
         $this->dimension = $dimension;
         $this->engine = $engine;
+        $this->quantizationSampleSize = $quantizationSampleSize;
         $this->centroidCache = [];
     }
 
@@ -76,8 +80,9 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         foreach ($this->getCreateStatements($ifNotExists) as $statement) {
             $success = $this->mysqli->query($statement);
             if (!$success) {
+                $e = new \Exception($this->mysqli->error);
                 $this->mysqli->rollback();
-                throw new \Exception($this->mysqli->error);
+                throw $e;
             }
         }
 
@@ -86,9 +91,112 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         $res = $this->mysqli->query(self::SQL_COSIM_FUNCTION);
 
         if(!$res) {
+            $e = new \Exception($this->mysqli->error);
             $this->mysqli->rollback();
-            throw new \Exception($this->mysqli->error);
+            throw $e;
         }
+
+        $this->mysqli->commit();
+    }
+
+    /**
+     * Quantize the vectors in the database using k-means clustering. Do this after inserting a large number of vectors to improve performance.
+     * @param \mysqli $connection A separate mysqli connection to use for the quantization. This is required because the main connection will be locked during the quantization.
+     * @return void
+     * @throws \Exception
+     */
+    public function performVectorQuantization(\mysqli $connection): void
+    {
+        $this->mysqli->begin_transaction();
+
+        $vectorTableName = $this->getVectorTableName();
+        $centroidTableName = $this->getCentroidTableName();
+
+        // Get a random sample of vectors
+        $statement = $this->mysqli->prepare("SELECT normalized_vector FROM $vectorTableName ORDER BY RAND() LIMIT ?");
+        if(!$statement) {
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
+        }
+
+        $statement->bind_param('i', $this->quantizationSampleSize);
+        $statement->execute();
+        $statement->bind_result($normalizedVector);
+
+        $vectors = [];
+        while ($statement->fetch()) {
+            $vectors[] = json_decode($normalizedVector, true);
+        }
+
+        $statement->close();
+
+        // Compute the centroids through k-means clustering
+        $space = new Space($this->dimension);
+        foreach($vectors as $vector) {
+            $space->addPoint($vector);
+        }
+
+        $numClusters = floor($this->count() / $this->quantizationSampleSize);
+
+        if($numClusters < 1) {
+            $numClusters = 1;
+        }
+
+        $clusters = $space->solve($numClusters);
+
+        $centroids = [];
+        foreach($clusters as $cluster) {
+            $centroids[] = json_encode($cluster->getCoordinates());
+        }
+
+        // Delete old centroids
+        $this->mysqli->query("DELETE FROM $centroidTableName");
+
+        // batch insert new centroids in a single call
+        $statement = $this->mysqli->prepare("INSERT INTO $centroidTableName (vector) VALUES (?)");
+        if(!$statement) {
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
+        }
+
+        $statement->bind_param('s', $centroid);
+        foreach($centroids as $centroid) {
+            $statement->execute();
+        }
+        $statement->close();
+
+        // Update the centroid cache
+        $this->updateCentroidCache();
+
+        // Select all vectors
+        $statement = $this->mysqli->prepare("SELECT id, normalized_vector FROM $vectorTableName");
+        if(!$statement) {
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
+        }
+
+        $statement->execute();
+        $statement->bind_result($id, $normalizedVector);
+
+        while ($statement->fetch()) {
+            // find the closest centroid and update vector
+            $v = json_decode($normalizedVector, true);
+            $centroidId = $this->getClosestCentroid($v);
+            $updateStatement = $connection->prepare("UPDATE $vectorTableName SET centroid_id = ? WHERE id = ?");
+            if(!$updateStatement) {
+                $e = new \Exception($this->mysqli->error);
+                $this->mysqli->rollback();
+                throw $e;
+            }
+            $updateStatement->bind_param('ii', $centroidId, $id);
+            $updateStatement->execute();
+            $updateStatement->close();
+        }
+
+        $statement->close();
 
         $this->mysqli->commit();
     }
@@ -105,7 +213,9 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         $statement = $this->mysqli->prepare("SELECT COSIM(?, ?)");
 
         if(!$statement) {
-            throw new \Exception($this->mysqli->error);
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
         }
 
         $v1 = json_encode($v1);
@@ -132,13 +242,13 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
 
     /**
      * Insert or update a vector
-     * @param \mysqli $mysqli The mysqli connection
      * @param array $vector The vector to insert or update
      * @param int|null $id Optional ID of the vector to update
+     * @param bool $isCentroid
      * @return int The ID of the inserted or updated vector
      * @throws \Exception If the vector could not be inserted or updated
      */
-    public function upsert(array $vector, int $id = null, $isCentroid = false): int
+    public function upsert(array $vector, int $id = null, bool $isCentroid = false): int
     {
         $magnitude = $this->getMagnitude($vector);
         $normalizedVector = $this->normalize($vector, $magnitude);
@@ -160,7 +270,9 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
 
         $statement = $this->mysqli->prepare($insertQuery);
         if(!$statement) {
-            throw new \Exception($this->mysqli->error);
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
         }
 
         $vector = json_encode($vector);
@@ -183,9 +295,33 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         return $id;
     }
 
+    private function updateCentroidCache(): void
+    {
+        $this->centroidCache = [];
+
+        $tableName = $this->getCentroidTableName();
+        $statement = $this->mysqli->prepare("SELECT id, vector FROM $tableName");
+
+        if(!$statement) {
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
+        }
+
+        $statement->execute();
+        $statement->bind_result($id, $vector);
+
+        while ($statement->fetch()) {
+            $this->centroidCache[$id] = json_decode($vector, true);
+        }
+    }
+
     private function getClosestCentroid($normalizedVector): int
     {
-        // todo: cache centroids
+        if(empty($this->centroidCache)) {
+            $this->updateCentroidCache();
+        }
+
         $centroidId = 0;
         $minDistance = 0;
         foreach($this->centroidCache as $id => $centroid) {
@@ -236,10 +372,17 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         return $result;
     }
 
-    public function selectAll(bool $isCentroid = false): array {
-        $tableName = $isCentroid ? $this->getCentroidTableName() : $this->getVectorTableName();
+    public function selectAll(): array {
+        $tableName = $this->getVectorTableName();
 
         $statement = $this->mysqli->prepare("SELECT id, vector, normalized_vector, magnitude, centroid_id FROM $tableName");
+
+        if(!$statement) {
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
+        }
+
         $statement->execute();
         $statement->bind_result($vectorId, $vector, $normalizedVector, $magnitude, $centroidId);
 
@@ -314,7 +457,9 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         $statement->bind_param('si', $normalizedVector, $centroidId);
 
         if(!$statement) {
-            throw new \Exception($this->mysqli->error);
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
         }
 
         $statement->execute();

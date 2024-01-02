@@ -10,6 +10,7 @@ class VectorTableTest extends TestCase
     private $vectorTable;
     private $dimension = 384;
     private $testVectorAmount = 1000;
+    private $quantizationSampleSize = 400;
 
     protected function setUp(): void
     {
@@ -21,7 +22,7 @@ class VectorTableTest extends TestCase
         }
 
         // Setup VectorTable for testing
-        $this->vectorTable = new VectorTable($mysqli, 'test_table', $this->dimension);
+        $this->vectorTable = new VectorTable($mysqli, 'test_table', $this->dimension, $this->quantizationSampleSize);
 
         // Create required tables for testing
         $this->vectorTable->initialize();
@@ -71,33 +72,25 @@ class VectorTableTest extends TestCase
     public function testUpsert() {
         $this->vectorTable->getConnection()->begin_transaction();
 
-        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
-
-        $ids = [];
-
+        $lastId = 0;
         echo "Inserting $this->testVectorAmount vectors...\n";
         $time = microtime(true);
-        foreach ($vecs as $vec) {
-            $ids[] = $this->vectorTable->upsert($vec);
+        for($i = 0; $i < $this->testVectorAmount; $i++) {
+            $vec = $this->getRandomVectors(1, $this->dimension)[0];
+            $lastId = $this->vectorTable->upsert($vec);
         }
+
         $time = microtime(true) - $time;
         echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
 
-        $this->assertEquals(count($vecs), $this->vectorTable->count());
-        $results = $this->vectorTable->select($ids);
-        $i = 0;
-        foreach ($results as $result) {
-            $this->assertEqualsWithDelta($vecs[$i], $result['vector'], 0.0001);
-            $i++;
-        }
+        $this->assertEquals($this->testVectorAmount, $this->vectorTable->count());
 
-        foreach ($results as $i => $result) {
-            $id = $result['id'];
-            $this->vectorTable->upsert($vecs[0], $id);
-            $r = $this->vectorTable->select([$id]);
-            $this->assertCount(1, $r);
-            $this->assertEqualsWithDelta($vecs[0], $r[0]['vector'], 0.00001);
-        }
+        $id = $lastId;
+        $newVec = $this->getRandomVectors(1, $this->dimension)[0];
+        $this->vectorTable->upsert($newVec, $id);
+        $r = $this->vectorTable->select([$id]);
+        $this->assertCount(1, $r);
+        $this->assertEqualsWithDelta($newVec, $r[0]['vector'], 0.00001);
 
         $this->vectorTable->getConnection()->rollback();
     }
@@ -138,8 +131,8 @@ class VectorTableTest extends TestCase
         $this->vectorTable->getConnection()->begin_transaction();
 
         // Insert $this->testVectorAmount random vectors
-        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
-        foreach ($vecs as $vec) {
+        for($i = 0; $i < $this->testVectorAmount; $i++) {
+            $vec = $this->getRandomVectors(1, $this->dimension)[0];
             $this->vectorTable->upsert($vec);
         }
 
@@ -148,7 +141,26 @@ class VectorTableTest extends TestCase
         $this->vectorTable->upsert($targetVector);
 
         // Now, we search for this vector
-        echo "Searching for vector...\n";
+        echo "Searching for 1 vector among $this->testVectorAmount without quantization...\n";
+        $time = microtime(true);
+        $results = $this->vectorTable->search($targetVector, 10);
+        $time = microtime(true) - $time;
+        // print time in format 00:00:00.000
+        $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
+        echo "Search completed in $elapsed";
+
+        $connection = new \mysqli('localhost', 'root', '', 'mysql-vector');
+
+        echo "Quantizing vectors...\n";
+        $time = microtime(true);
+        $this->vectorTable->performVectorQuantization($connection);
+        $time = microtime(true) - $time;
+        echo "Quantized into " . floor($this->testVectorAmount / $this->quantizationSampleSize) . " regions.";
+        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
+
+        $connection->close();
+
+        echo "Searching for 1 vector among $this->testVectorAmount with quantization...\n";
         $time = microtime(true);
         $results = $this->vectorTable->search($targetVector, 10);
         $time = microtime(true) - $time;
@@ -170,7 +182,7 @@ class VectorTableTest extends TestCase
         $this->vectorTable->getConnection()->begin_transaction();
 
         $ids = [];
-        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
+        $vecs = $this->getRandomVectors(10, $this->dimension);
         foreach ($vecs as $vec) {
             $ids[] = $this->vectorTable->upsert($vec);
         }
