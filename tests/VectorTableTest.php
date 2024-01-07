@@ -14,6 +14,8 @@ class VectorTableTest extends TestCase
 
     protected function setUp(): void
     {
+        VectorTableTest::tearDownAfterClass();
+
         $mysqli = new \mysqli('localhost', 'root', '', 'mysql-vector');
 
         // Check connection
@@ -73,12 +75,23 @@ class VectorTableTest extends TestCase
         $this->vectorTable->getConnection()->begin_transaction();
 
         $lastId = 0;
-        echo "Inserting $this->testVectorAmount vectors...\n";
+        $vecArray = [];
+        echo "Inserting $this->testVectorAmount vectors one-at-a-time...\n";
         $time = microtime(true);
         for($i = 0; $i < $this->testVectorAmount; $i++) {
             $vec = $this->getRandomVectors(1, $this->dimension)[0];
             $lastId = $this->vectorTable->upsert($vec);
+            $vecArray[] = $vec;
         }
+
+        $time = microtime(true) - $time;
+        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
+
+        $secondConnection = new \mysqli('localhost', 'root', '', 'mysql-vector');
+
+        echo "Inserting $this->testVectorAmount vectors in a batch...\n";
+        $time = microtime(true);
+        $this->vectorTable->batchInsert($secondConnection, $vecArray);
 
         $time = microtime(true) - $time;
         echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";

@@ -2,11 +2,10 @@
 
 namespace MHz\MysqlVector\Nlp;
 
-// require vendor autoload
+require_once __DIR__ . '/../../vendor/autoload.php';
+
 use OnnxRuntime\Model;
 use OnnxRuntime\Vendor;
-
-require_once __DIR__ . '/../../vendor/autoload.php';
 
 class Embedder
 {
@@ -14,6 +13,8 @@ class Embedder
     private BertTokenizer $tokenizer;
 
     const QUERY_INSTRUCTION = "Represent this sentence for searching relevant passages:";
+    const EMBEDDING_DIMENSIONS = 384;
+    const MAX_LENGTH = 512;
 
     public function __construct() {
         // check if onnxruntime is installed

@@ -187,7 +187,8 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
             $centroidId = $this->getClosestCentroid($v);
             $updateStatement = $connection->prepare("UPDATE $vectorTableName SET centroid_id = ? WHERE id = ?");
             if(!$updateStatement) {
-                $e = new \Exception($this->mysqli->error);
+                $e = new \Exception($connection->error);
+                $connection->rollback();
                 $this->mysqli->rollback();
                 throw $e;
             }
@@ -293,6 +294,41 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         $statement->close();
 
         return $id;
+    }
+
+    /**
+     * Insert multiple vectors in a single query
+     * @param \mysqli $connection A separate mysqli connection to use for the insert. This is required because the main connection will be locked during the insert.
+     * @param array $vectorArray Array of vectors to insert
+     * @return array Array of ids of the inserted vectors
+     * @throws \Exception
+     */
+    public function batchInsert(\mysqli $connection, array $vectorArray): array {
+        $tableName = $this->getVectorTableName();
+
+        $statement = $connection->prepare("INSERT INTO $tableName (vector, normalized_vector, magnitude, centroid_id) VALUES (?, ?, ?, ?)");
+        if(!$statement) {
+            $e = new \Exception($connection->error);
+            $connection->rollback();
+            throw $e;
+        }
+
+        $ids = [];
+
+        $statement->bind_param('ssdi', $vector, $normalizedVector, $magnitude, $centroidId);
+        foreach($vectorArray as $vector) {
+            $magnitude = $this->getMagnitude($vector);
+            $normalizedVector = $this->normalize($vector, $magnitude);
+            $centroidId = $this->getClosestCentroid($normalizedVector);
+            $vector = json_encode($vector);
+            $normalizedVector = json_encode($normalizedVector);
+            $statement->execute();
+
+            $ids[] = $statement->insert_id;
+        }
+        $statement->close();
+
+        return $ids;
     }
 
     private function updateCentroidCache(): void

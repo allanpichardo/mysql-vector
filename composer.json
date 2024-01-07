@@ -32,12 +32,12 @@
   },
   "autoload": {
       "psr-4": {
-      "MHz\\MysqlVector\\": "src/"
+        "MHz\\MysqlVector\\": "src/"
       }
   },
   "autoload-dev": {
       "psr-4": {
-      "MHz\\MysqlVector\\Tests\\": "tests/"
+        "MHz\\MysqlVector\\Tests\\": "tests/"
       }
   },
   "require-dev": {
