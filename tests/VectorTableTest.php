@@ -9,8 +9,7 @@ class VectorTableTest extends TestCase
 {
     private $vectorTable;
     private $dimension = 384;
-    private $testVectorAmount = 1000;
-    private $quantizationSampleSize = 400;
+    private $testVectorAmount = 100;
 
     protected function setUp(): void
     {
@@ -24,7 +23,7 @@ class VectorTableTest extends TestCase
         }
 
         // Setup VectorTable for testing
-        $this->vectorTable = new VectorTable($mysqli, 'test_table', $this->dimension, $this->quantizationSampleSize);
+        $this->vectorTable = new VectorTable($mysqli, 'test_table', $this->dimension);
 
         // Create required tables for testing
         $this->vectorTable->initialize();
@@ -46,12 +45,6 @@ class VectorTableTest extends TestCase
         $this->assertEquals('test_table_vectors', $tableName);
     }
 
-    public function testGetCentroidTableName()
-    {
-        $tableName = $this->vectorTable->getCentroidTableName();
-        $this->assertEquals('test_table_centroids', $tableName);
-    }
-
     public function testUpsertSingle() {
         $this->vectorTable->getConnection()->begin_transaction();
 
@@ -65,7 +58,7 @@ class VectorTableTest extends TestCase
             $ids[] = $this->vectorTable->upsert($vec);
         }
         $time = microtime(true) - $time;
-        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
+        echo "Elapsed time: " . sprintf("%.2f", $time) . " seconds\n";
 
         $this->assertEquals(count($vecs), $this->vectorTable->count());
         $this->vectorTable->getConnection()->rollback();
@@ -85,16 +78,16 @@ class VectorTableTest extends TestCase
         }
 
         $time = microtime(true) - $time;
-        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
+        echo "Elapsed time: " . sprintf("%.2f", $time) . " seconds\n";
 
-        $secondConnection = new \mysqli('localhost', 'root', '', 'mysql-vector');
+        $this->assertEquals($this->testVectorAmount, count($this->vectorTable->selectAll()));
 
         echo "Inserting $this->testVectorAmount vectors in a batch...\n";
         $time = microtime(true);
-        $this->vectorTable->batchInsert($secondConnection, $vecArray);
+        $this->vectorTable->batchInsert($vecArray);
 
         $time = microtime(true) - $time;
-        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
+        echo "Elapsed time: " . sprintf("%.2f", $time) . " seconds\n";
 
         $this->assertEquals($this->testVectorAmount, $this->vectorTable->count());
 
@@ -141,12 +134,13 @@ class VectorTableTest extends TestCase
     }
 
     public function testSearch() {
+        $multiples = 1;
         $this->vectorTable->getConnection()->begin_transaction();
 
         // Insert $this->testVectorAmount random vectors
-        for($i = 0; $i < $this->testVectorAmount; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
+        for($i = 0; $i < $multiples; $i++) {
+            $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
+            $this->vectorTable->batchInsert($vecs);
         }
 
         // Let's insert a known vector
@@ -154,32 +148,13 @@ class VectorTableTest extends TestCase
         $this->vectorTable->upsert($targetVector);
 
         // Now, we search for this vector
-        echo "Searching for 1 vector among $this->testVectorAmount without quantization...\n";
+        $searchAmount = $this->testVectorAmount * $multiples;
+        echo "Searching for 1 vector among ($searchAmount) with binary quantization...\n";
         $time = microtime(true);
-        $results = $this->vectorTable->search($targetVector, 10);
+        $results = $this->vectorTable->search($targetVector);
         $time = microtime(true) - $time;
         // print time in format 00:00:00.000
-        $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
-        echo "Search completed in $elapsed";
-
-        $connection = new \mysqli('localhost', 'root', '', 'mysql-vector');
-
-        echo "Quantizing vectors...\n";
-        $time = microtime(true);
-        $this->vectorTable->performVectorQuantization($connection);
-        $time = microtime(true) - $time;
-        echo "Quantized into " . floor($this->testVectorAmount / $this->quantizationSampleSize) . " regions.";
-        echo "Elapsed time: " . sprintf('%02d:%02d:%02d', ($time/3600), ($time/60%60), $time%60) . "\n";
-
-        $connection->close();
-
-        echo "Searching for 1 vector among $this->testVectorAmount with quantization...\n";
-        $time = microtime(true);
-        $results = $this->vectorTable->search($targetVector, 10);
-        $time = microtime(true) - $time;
-        // print time in format 00:00:00.000
-        $elapsed = gmdate("H:i:s", $time) . '.' . str_pad(round($time - floor($time), 3) * 1000, 3, '0', STR_PAD_LEFT) . "\n";
-        echo "Search completed in $elapsed";
+        echo sprintf("Search completed in %.2f seconds\n", $time);
 
         // At least the first result should be our target vector or very close
         $firstResultVector = $results[0]['vector'];
@@ -216,8 +191,7 @@ class VectorTableTest extends TestCase
         // Clean up the database and close connection
         $mysqli = new \mysqli('localhost', 'root', '', 'mysql-vector');
         $vectorTable = new VectorTable($mysqli, 'test_table', 3);
-        $mysqli->query("DROP TABLE " . $vectorTable->getVectorTableName());
-        $mysqli->query("DROP TABLE " . $vectorTable->getCentroidTableName());
+        $mysqli->query("DROP TABLE IF EXISTS " . $vectorTable->getVectorTableName());
         $mysqli->query("DROP FUNCTION IF EXISTS COSIM");
         $mysqli->close();
     }
@@ -225,8 +199,7 @@ class VectorTableTest extends TestCase
     protected function tearDown(): void
     {
         // Clean up the database and close connection
-        $this->vectorTable->getConnection()->query("DROP TABLE " . $this->vectorTable->getVectorTableName());
-        $this->vectorTable->getConnection()->query("DROP TABLE " . $this->vectorTable->getCentroidTableName());
+        $this->vectorTable->getConnection()->query("DROP TABLE IF EXISTS " . $this->vectorTable->getVectorTableName());
         $this->vectorTable->getConnection()->query("DROP FUNCTION IF EXISTS COSIM");
         $this->vectorTable->getConnection()->close();
     }

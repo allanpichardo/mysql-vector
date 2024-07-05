@@ -1,9 +1,20 @@
 # A Library for MySQL Vector Operations and Text Embeddings
 
 ## Overview
-The `VectorTable` class is a PHP implementation designed to facilitate the storage, retrieval, and comparison of high-dimensional vectors in a MySQL database. This class utilizes MySQL JSON data types and a custom cosine similarity function (`COSIM`) to perform vector comparisons efficiently.
+The `VectorTable` class is a PHP implementation designed to facilitate the storage, retrieval, and comparison of high-dimensional vectors in a MySQL database. This class utilizes MySQL JSON data types and a custom cosine similarity function (`COSIM`) to perform vector comparisons efficiently. 
 
-**Note:** This library is only suitable for small datasets (less than 100,000 vectors). However, it is not recommended for large datasets. For large datasets, it is recommended that you use a dedicated vector database such as [Milvus](https://milvus.io/).
+### Search Performance
+Vectors are binary quantized upon insertion into the database to optimize search speed and reranked to improve accuracy.
+However, this library is only suitable for small datasets (less than 100,000,000 vectors). For large datasets, it is recommended that you use a dedicated vector database such as [Qdrant](https://qdrant.tech/).
+
+Search Benchmarks (384-dimensional vectors):
+Vectors | Time (seconds)
+--------|---------------
+100     | 0.02
+1000    | 0.02
+10000   | 0.03
+100000  | 0.06
+1000000 | 0.48
 
 ## Features
 - Store vectors in a MySQL database using JSON data types.
@@ -71,21 +82,6 @@ Perform a search for vectors similar to a given vector using the cosine similari
 ```php
 // Find vectors similar to a given vector
 $similarVectors = $vectorTable->search($vector, $topN);
-```
-
-### Quantizing Vectors to Improve Search Performance
-Quantization is a technique that can be used to improve the performance of vector searches. This technique involves dividing the vector space into a set of regions and assigning each vector to a region. When performing a vector search, only vectors in the same region as the query vector are considered. This technique can significantly reduce the number of vectors that need to be compared when performing a vector search.
-
-The `VectorTable` class supports vector quantization using the `performVectorQuantization` method. It is recommended that you perform vector quantization after inserting roughly 1000 vectors or more. Depending on your use case, as your dataset grows, you may need to perform vector quantization again to maintain performance and accuracy.
-
-To perform vector quantization, you will need a second `\mysqli` connection to the database.
-
-```php
-// Create a new mysqli connection
-$mysqli2 = new mysqli("hostname", "username", "password", "database");
-
-// Perform vector quantization
-$vectorTable->performVectorQuantization($mysqli2);
 ```
 
 ## Text Embeddings
