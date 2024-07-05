@@ -39,16 +39,18 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
     }
 
     protected function getCreateStatements(bool $ifNotExists = true): array {
+        $binaryCodeLengthInBytes = ceil($this->dimension / 8);
+
         $vectorsQuery =
             "CREATE TABLE %s %s (
                 id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
                 vector JSON,
                 normalized_vector JSON,
                 magnitude DOUBLE,
-                binary_code BLOB,
+                binary_code BINARY(%d),
                 created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=%s;";
-        $vectorsQuery = sprintf($vectorsQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getVectorTableName(), $this->engine);
+        $vectorsQuery = sprintf($vectorsQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getVectorTableName(), $binaryCodeLengthInBytes, $this->engine);
 
         return [$vectorsQuery];
     }
@@ -56,14 +58,26 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
     /**
      * Convert an n-dimensional vector in to an n-bit binary code
      * @param array $vector
-     * @return string
+     * @return int
      */
-    private function vectorToBinary(array $vector): string {
+    private function vectorToHex(array $vector): string {
         $binary = '';
         foreach($vector as $value) {
             $binary .= $value > 0 ? '1' : '0';
         }
-        return pack('H*', base_convert($binary, 2, 16));
+
+        $padded = str_pad($binary, ceil(strlen($binary) / 8) * 8, '0', STR_PAD_LEFT);
+
+        return $this->binaryToHexadecimal($padded);
+    }
+
+    private function binaryToHexadecimal(string $binaryString): string {
+        $hex = '';
+        foreach(str_split($binaryString, 8) as $char) {
+            $hex .= strtoupper(dechex(bindec(strrev($char))));
+        }
+        $hex = str_pad($hex, ceil(strlen($hex) / 4) * 4, '0', STR_PAD_LEFT);
+        return $hex;
     }
 
     /**
@@ -93,6 +107,9 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
             $this->mysqli->rollback();
             throw $e;
         }
+
+        $binaryCodeLengthInBytes = ceil($this->dimension / 8);
+        $this->mysqli->query("CREATE INDEX idx_binary_code ON " . $this->getVectorTableName() . " (binary_code($binaryCodeLengthInBytes))");
 
         $this->mysqli->commit();
     }
@@ -137,12 +154,12 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
     {
         $magnitude = $this->getMagnitude($vector);
         $normalizedVector = $this->normalize($vector, $magnitude);
-        $binaryCode = $this->vectorToBinary($normalizedVector);
+        $binaryCode = $this->vectorToHex($normalizedVector);
         $tableName = $this->getVectorTableName();
 
         $insertQuery = empty($id) ?
-            "INSERT INTO $tableName (vector, normalized_vector, magnitude, binary_code) VALUES (?, ?, ?, ?)" :
-            "UPDATE $tableName SET vector = ?, normalized_vector = ?, magnitude = ?, binary_code = ? WHERE id = $id";
+            "INSERT INTO $tableName (vector, normalized_vector, magnitude, binary_code) VALUES (?, ?, ?, UNHEX(?))" :
+            "UPDATE $tableName SET vector = ?, normalized_vector = ?, magnitude = ?, binary_code = UNHEX(?) WHERE id = $id";
 
         $statement = $this->mysqli->prepare($insertQuery);
         if(!$statement) {
@@ -154,7 +171,7 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         $vector = json_encode($vector);
         $normalizedVector = json_encode($normalizedVector);
 
-        $statement->bind_param('ssdb', $vector, $normalizedVector, $magnitude, $binaryCode);
+        $statement->bind_param('ssds', $vector, $normalizedVector, $magnitude, $binaryCode);
 
         $success = $statement->execute();
         if(!$success) {
@@ -177,27 +194,37 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
     public function batchInsert(\mysqli $connection, array $vectorArray): array {
         $tableName = $this->getVectorTableName();
 
-        $statement = $connection->prepare("INSERT INTO $tableName (vector, normalized_vector, magnitude, binary_code) VALUES (?, ?, ?, ?)");
+        $statement = $connection->prepare("INSERT INTO $tableName (vector, normalized_vector, magnitude, binary_code) VALUES (?, ?, ?, UNHEX(?))");
         if(!$statement) {
-            $e = new \Exception($connection->error);
-            $connection->rollback();
-            throw $e;
+            throw new \Exception("Prepare failed: " . $connection->error);
         }
 
         $ids = [];
+        $connection->begin_transaction();
+        try {
+            foreach ($vectorArray as $vector) {
+                $magnitude = $this->getMagnitude($vector);
+                $normalizedVector = $this->normalize($vector, $magnitude);
+                $binaryCode = $this->vectorToHex($normalizedVector);
+                $vectorJson = json_encode($vector);
+                $normalizedVectorJson = json_encode($normalizedVector);
 
-        $statement->bind_param('ssdb', $vector, $normalizedVector, $magnitude, $binaryCode);
-        foreach($vectorArray as $vector) {
-            $magnitude = $this->getMagnitude($vector);
-            $normalizedVector = $this->normalize($vector, $magnitude);
-            $binaryCode = $this->vectorToBinary($normalizedVector);
-            $vector = json_encode($vector);
-            $normalizedVector = json_encode($normalizedVector);
-            $statement->execute();
+                $statement->bind_param('ssds', $vectorJson, $normalizedVectorJson, $magnitude, $binaryCode);
 
-            $ids[] = $statement->insert_id;
+                if (!$statement->execute()) {
+                    throw new \Exception("Execute failed: " . $statement->error);
+                }
+
+                $ids[] = $statement->insert_id;
+            }
+
+            $connection->commit();
+        } catch (\Exception $e) {
+            $connection->rollback();
+            throw $e;
+        } finally {
+            $statement->close();
         }
-        $statement->close();
 
         return $ids;
     }
@@ -314,14 +341,14 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
      * @return array Array of results containing the id, similarity, and vector
      * @throws \Exception
      */
-    public function search(array $vector, int $n = 100): array {
+    public function search(array $vector, int $n = 100, bool $rerank = true): array {
         $tableName = $this->getVectorTableName();
         $normalizedVector = $this->normalize($vector);
-        $binaryCode = $this->vectorToBinary($normalizedVector);
+        $binaryCode = $this->vectorToHex($normalizedVector);
 
         // Initial search using binary codes
-        $statement = $this->mysqli->prepare("SELECT id, vector, normalized_vector, magnitude, binary_code, BIT_COUNT(binary_code ^ ?) AS hamming_distance FROM $tableName ORDER BY hamming_distance LIMIT $n");
-        $statement->bind_param('b', $binaryCode);
+        $statement = $this->mysqli->prepare("SELECT id, BIT_COUNT(binary_code ^ UNHEX(?)) AS hamming_distance FROM $tableName ORDER BY hamming_distance LIMIT $n");
+        $statement->bind_param('s', $binaryCode);
 
         if(!$statement) {
             $e = new \Exception($this->mysqli->error);
@@ -330,41 +357,55 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
         }
 
         $statement->execute();
-        $statement->bind_result($vectorId, $v, $nv, $m, $bc, $hd);
+        $statement->bind_result($vectorId, $hd);
 
         $candidates = [];
         while ($statement->fetch()) {
-            $candidates[] = [
-                'id' => $vectorId,
-                'vector' => json_decode($v, true),
-                'normalized_vector' => json_decode($nv, true),
-                'magnitude' => $m,
-                'binary_code' => $bc,
-                'hamming_distance' => $hd
-            ];
+            $candidates[] = $vectorId;
         }
         $statement->close();
 
         // Rerank candidates using cosine similarity
+        $placeholders = implode(',', array_fill(0, count($candidates), '?'));
+        $sql = "
+        SELECT id, vector, normalized_vector, magnitude, COSIM(normalized_vector, ?) AS similarity
+        FROM %s
+        WHERE id IN ($placeholders)
+        ORDER BY similarity DESC
+        LIMIT $n";
+        $sql = sprintf($sql, $tableName);
+
+        $statement = $this->mysqli->prepare($sql);
+
+        if(!$statement) {
+            $e = new \Exception($this->mysqli->error);
+            $this->mysqli->rollback();
+            throw $e;
+        }
+
+        $normalizedVector = json_encode($normalizedVector);
+
+        $types = str_repeat('i', count($candidates));
+        $statement->bind_param('s' . $types, $normalizedVector, ...$candidates);
+
+        $statement->execute();
+
+        $statement->bind_result($id, $v, $nv, $mag, $sim);
+
         $results = [];
-        foreach ($candidates as $candidate) {
-            $similarity = $this->cosim($normalizedVector, $candidate['normalized_vector']);
+        while ($statement->fetch()) {
             $results[] = [
-                'id' => $candidate['id'],
-                'vector' => $candidate['vector'],
-                'normalized_vector' => $candidate['normalized_vector'],
-                'magnitude' => $candidate['magnitude'],
-                'binary_code' => $candidate['binary_code'],
-                'hamming_distance' => $candidate['hamming_distance'],
-                'similarity' => $similarity
+                'id' => $id,
+                'vector' => json_decode($v, true),
+                'normalized_vector' => json_decode($nv, true),
+                'magnitude' => $mag,
+                'similarity' => $sim
             ];
         }
 
-        usort($results, function ($a, $b) {
-            return $b['similarity'] <=> $a['similarity'];
-        });
+        $statement->close();
 
-        return array_slice($results, 0, $n);
+        return $results;
     }
 
     /**

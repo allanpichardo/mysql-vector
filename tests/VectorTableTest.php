@@ -139,10 +139,12 @@ class VectorTableTest extends TestCase
         $this->vectorTable->getConnection()->begin_transaction();
 
         // Insert $this->testVectorAmount random vectors
-        for($i = 0; $i < $this->testVectorAmount; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
+        $conn = new \mysqli('localhost', 'root', '', 'mysql-vector');
+        $conn->begin_transaction();
+        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
+        $this->vectorTable->batchInsert($conn, $vecs);
+        $conn->commit();
+        $conn->close();
 
         // Let's insert a known vector
         $targetVector = array_fill(0, $this->dimension, 0.5);
