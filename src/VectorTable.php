@@ -45,11 +45,10 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
                 vector JSON,
                 normalized_vector JSON,
                 magnitude DOUBLE,
-                binary_code BINARY(%d),
-                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                INDEX (centroid_id)
+                binary_code BLOB,
+                created TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             ) ENGINE=%s;";
-        $vectorsQuery = sprintf($vectorsQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getVectorTableName(), $this->dimension, $this->engine);
+        $vectorsQuery = sprintf($vectorsQuery, $ifNotExists ? 'IF NOT EXISTS' : '', $this->getVectorTableName(), $this->engine);
 
         return [$vectorsQuery];
     }
@@ -315,7 +314,7 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
      * @return array Array of results containing the id, similarity, and vector
      * @throws \Exception
      */
-    public function search(array $vector, int $n = 10): array {
+    public function search(array $vector, int $n = 100): array {
         $tableName = $this->getVectorTableName();
         $normalizedVector = $this->normalize($vector);
         $binaryCode = $this->vectorToBinary($normalizedVector);
