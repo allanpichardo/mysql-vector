@@ -82,11 +82,9 @@ class VectorTableTest extends TestCase
 
         $this->assertEquals($this->testVectorAmount, count($this->vectorTable->selectAll()));
 
-        $secondConnection = new \mysqli('localhost', 'root', '', 'mysql-vector');
-
         echo "Inserting $this->testVectorAmount vectors in a batch...\n";
         $time = microtime(true);
-        $this->vectorTable->batchInsert($secondConnection, $vecArray);
+        $this->vectorTable->batchInsert($vecArray);
 
         $time = microtime(true) - $time;
         echo "Elapsed time: " . sprintf("%.2f", $time) . " seconds\n";
@@ -136,24 +134,24 @@ class VectorTableTest extends TestCase
     }
 
     public function testSearch() {
+        $multiples = 10;
         $this->vectorTable->getConnection()->begin_transaction();
 
         // Insert $this->testVectorAmount random vectors
-        $conn = new \mysqli('localhost', 'root', '', 'mysql-vector');
-        $conn->begin_transaction();
-        $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
-        $this->vectorTable->batchInsert($conn, $vecs);
-        $conn->commit();
-        $conn->close();
+        for($i = 0; $i < $multiples; $i++) {
+            $vecs = $this->getRandomVectors($this->testVectorAmount, $this->dimension);
+            $this->vectorTable->batchInsert($vecs);
+        }
 
         // Let's insert a known vector
         $targetVector = array_fill(0, $this->dimension, 0.5);
         $this->vectorTable->upsert($targetVector);
 
         // Now, we search for this vector
-        echo "Searching for 1 vector among $this->testVectorAmount with binary quantization...\n";
+        $searchAmount = $this->testVectorAmount * $multiples;
+        echo "Searching for 1 vector among ($searchAmount) with binary quantization...\n";
         $time = microtime(true);
-        $results = $this->vectorTable->search($targetVector, 100);
+        $results = $this->vectorTable->search($targetVector);
         $time = microtime(true) - $time;
         // print time in format 00:00:00.000
         echo sprintf("Search completed in %.2f seconds\n", $time);

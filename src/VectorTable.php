@@ -186,21 +186,20 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
 
     /**
      * Insert multiple vectors in a single query
-     * @param \mysqli $connection A separate mysqli connection to use for the insert. This is required because the main connection will be locked during the insert.
      * @param array $vectorArray Array of vectors to insert
      * @return array Array of ids of the inserted vectors
      * @throws \Exception
      */
-    public function batchInsert(\mysqli $connection, array $vectorArray): array {
+    public function batchInsert(array $vectorArray): array {
         $tableName = $this->getVectorTableName();
 
-        $statement = $connection->prepare("INSERT INTO $tableName (vector, normalized_vector, magnitude, binary_code) VALUES (?, ?, ?, UNHEX(?))");
+        $statement = $this->getConnection()->prepare("INSERT INTO $tableName (vector, normalized_vector, magnitude, binary_code) VALUES (?, ?, ?, UNHEX(?))");
         if(!$statement) {
-            throw new \Exception("Prepare failed: " . $connection->error);
+            throw new \Exception("Prepare failed: " . $this->getConnection()->error);
         }
 
         $ids = [];
-        $connection->begin_transaction();
+        $this->getConnection()->begin_transaction();
         try {
             foreach ($vectorArray as $vector) {
                 $magnitude = $this->getMagnitude($vector);
@@ -218,9 +217,9 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
                 $ids[] = $statement->insert_id;
             }
 
-            $connection->commit();
+            $this->getConnection()->commit();
         } catch (\Exception $e) {
-            $connection->rollback();
+            $this->getConnection()->rollback();
             throw $e;
         } finally {
             $statement->close();
@@ -341,7 +340,7 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
      * @return array Array of results containing the id, similarity, and vector
      * @throws \Exception
      */
-    public function search(array $vector, int $n = 100, bool $rerank = true): array {
+    public function search(array $vector, int $n = 10): array {
         $tableName = $this->getVectorTableName();
         $normalizedVector = $this->normalize($vector);
         $binaryCode = $this->vectorToHex($normalizedVector);

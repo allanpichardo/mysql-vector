@@ -34,6 +34,8 @@ class PerformanceBenchmarkTest extends TestCase
         $targetVector = array_fill(0, $this->dimension, 0.5);
         $this->vectorTable->upsert($targetVector);
 
+        $vecs = $this->getRandomVectors(100, $this->dimension)[0];
+        $this->vectorTable->batchInsert($vecs);
         for($i = 0; $i < 100; $i++) {
             $vec = $this->getRandomVectors(1, $this->dimension)[0];
             $this->vectorTable->upsert($vec);
