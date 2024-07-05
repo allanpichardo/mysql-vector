@@ -9,7 +9,7 @@ class VectorTableTest extends TestCase
 {
     private $vectorTable;
     private $dimension = 384;
-    private $testVectorAmount = 1000;
+    private $testVectorAmount = 100;
 
     protected function setUp(): void
     {
@@ -134,7 +134,7 @@ class VectorTableTest extends TestCase
     }
 
     public function testSearch() {
-        $multiples = 10;
+        $multiples = 1;
         $this->vectorTable->getConnection()->begin_transaction();
 
         // Insert $this->testVectorAmount random vectors

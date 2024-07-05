@@ -34,12 +34,8 @@ class PerformanceBenchmarkTest extends TestCase
         $targetVector = array_fill(0, $this->dimension, 0.5);
         $this->vectorTable->upsert($targetVector);
 
-        $vecs = $this->getRandomVectors(100, $this->dimension)[0];
+        $vecs = $this->getRandomVectors(100, $this->dimension);
         $this->vectorTable->batchInsert($vecs);
-        for($i = 0; $i < 100; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
 
         // Now, we search for this vector
         echo "Searching for 1 vector among 100...\n";
@@ -48,10 +44,8 @@ class PerformanceBenchmarkTest extends TestCase
         $time = microtime(true) - $time;
         echo sprintf("Search completed in %.2f seconds\n", $time);
 
-        for($i = 0; $i < 900; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
+        $vecs = $this->getRandomVectors(900, $this->dimension);
+        $this->vectorTable->batchInsert($vecs);
 
         // Now, we search for this vector
         echo "Searching for 1 vector among 1000...\n";
@@ -60,10 +54,8 @@ class PerformanceBenchmarkTest extends TestCase
         $time = microtime(true) - $time;
         echo sprintf("Search completed in %.2f seconds\n", $time);
 
-        for($i = 0; $i < 9000; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
+        $vecs = $this->getRandomVectors(9000, $this->dimension);
+        $this->vectorTable->batchInsert($vecs);
 
         // Now, we search for this vector
         echo "Searching for 1 vector among 10000...\n";
@@ -72,10 +64,8 @@ class PerformanceBenchmarkTest extends TestCase
         $time = microtime(true) - $time;
         echo sprintf("Search completed in %.2f seconds\n", $time);
 
-        for($i = 0; $i < 90000; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
+        $vecs = $this->getRandomVectors(90000, $this->dimension);
+        $this->vectorTable->batchInsert($vecs);
 
         // Now, we search for this vector
         echo "Searching for 1 vector among 100000...\n";
@@ -84,10 +74,8 @@ class PerformanceBenchmarkTest extends TestCase
         $time = microtime(true) - $time;
         echo sprintf("Search completed in %.2f seconds\n", $time);
 
-        for($i = 0; $i < 900000; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
+        $vecs = $this->getRandomVectors(900000, $this->dimension);
+        $this->vectorTable->batchInsert($vecs);
 
         // Now, we search for this vector
         echo "Searching for 1 vector among 1000000...\n";
@@ -96,10 +84,8 @@ class PerformanceBenchmarkTest extends TestCase
         $time = microtime(true) - $time;
         echo sprintf("Search completed in %.2f seconds\n", $time);
 
-        for($i = 0; $i < 9000000; $i++) {
-            $vec = $this->getRandomVectors(1, $this->dimension)[0];
-            $this->vectorTable->upsert($vec);
-        }
+        $vecs = $this->getRandomVectors(9000000, $this->dimension);
+        $this->vectorTable->batchInsert($vecs);
 
         // Now, we search for this vector
         echo "Searching for 1 vector among 10000000...\n";

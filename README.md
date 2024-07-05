@@ -5,10 +5,16 @@ The `VectorTable` class is a PHP implementation designed to facilitate the stora
 
 ### Search Performance
 Vectors are binary quantized upon insertion into the database to optimize search speed and reranked to improve accuracy.
-However, this library is only suitable for small datasets (less than 100,000 vectors). For large datasets, it is recommended that you use a dedicated vector database such as [Qdrant](https://qdrant.tech/).
+However, this library is only suitable for small datasets (less than 100,000,000 vectors). For large datasets, it is recommended that you use a dedicated vector database such as [Qdrant](https://qdrant.tech/).
 
-
-
+Search Benchmarks (384-dimensional vectors):
+Vectors | Time (seconds)
+--------|---------------
+100     | 0.02
+1000    | 0.02
+10000   | 0.03
+100000  | 0.06
+1000000 | 0.48
 
 ## Features
 - Store vectors in a MySQL database using JSON data types.
