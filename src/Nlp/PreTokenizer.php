@@ -4,6 +4,8 @@ namespace MHz\MysqlVector\Nlp;
 
 class PreTokenizer
 {
+    public $config;
+
     public function __construct(array $config= [])
     {
         $this->config = $config;

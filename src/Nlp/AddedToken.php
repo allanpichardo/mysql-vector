@@ -4,6 +4,14 @@ namespace MHz\MysqlVector\Nlp;
 
 class AddedToken
 {
+    public $content;
+    public $id;
+    public $singleWord;
+    public $lstrip;
+    public $rstrip;
+    public $special;
+    public $normalized;
+
     public function __construct(array $config) {
         $this->content = $config['content'];
         $this->id = $config['id'];

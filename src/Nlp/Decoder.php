@@ -6,6 +6,10 @@ class Decoder
 {
     protected array $config;
 
+    public $addedTokens;
+    public $endOfWordSuffix;
+    public $trimOffsets;
+
     public function __construct(array $config = []) {
         $this->config = $config;
 

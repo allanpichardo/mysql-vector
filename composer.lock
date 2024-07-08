@@ -4,28 +4,28 @@
         "Read more about it at https://getcomposer.org/doc/01-basic-usage.md#installing-dependencies",
         "This file is @generated automatically"
     ],
-    "content-hash": "f1c28687b87beb41b20156feb02d4439",
+    "content-hash": "2f4be660fffbddb613ebd57a22ac0f52",
     "packages": [
         {
             "name": "ankane/onnxruntime",
-            "version": "v0.1.7",
+            "version": "v0.2.1",
             "source": {
                 "type": "git",
                 "url": "https://github.com/ankane/onnxruntime-php.git",
-                "reference": "179cbae11f297db628c48d571e524e2deebde42b"
+                "reference": "2476c2bb6927769ce605f58f23f965dc14a7e7b4"
             },
             "dist": {
                 "type": "zip",
-                "url": "https://api.github.com/repos/ankane/onnxruntime-php/zipball/179cbae11f297db628c48d571e524e2deebde42b",
-                "reference": "179cbae11f297db628c48d571e524e2deebde42b",
+                "url": "https://api.github.com/repos/ankane/onnxruntime-php/zipball/2476c2bb6927769ce605f58f23f965dc14a7e7b4",
+                "reference": "2476c2bb6927769ce605f58f23f965dc14a7e7b4",
                 "shasum": ""
             },
             "require": {
-                "ext-ffi": ">= 8.0",
-                "php": ">= 8.0"
+                "ext-ffi": ">= 8.1",
+                "php": ">= 8.1"
             },
             "require-dev": {
-                "phpunit/phpunit": "^9"
+                "phpunit/phpunit": "^10"
             },
             "type": "library",
             "autoload": {
@@ -48,7 +48,7 @@
                 "issues": "https://github.com/ankane/onnxruntime-php/issues",
                 "source": "https://github.com/ankane/onnxruntime-php"
             },
-            "time": "2023-10-15T22:37:14+00:00"
+            "time": "2024-05-23T00:25:32+00:00"
         },
         {
             "name": "bdelespierre/php-kmeans",

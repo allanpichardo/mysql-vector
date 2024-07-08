@@ -133,6 +133,20 @@ class VectorTableTest extends TestCase
         $this->vectorTable->getConnection()->rollback();
     }
 
+    public function testVectorToHex() {
+        $hex = $this->vectorTable->vectorToHex([0.5, 0.5, 0, 0, 0, 0.5]);
+        $this->assertEqualsIgnoringCase('0031', $hex);
+
+        $hex = $this->vectorTable->vectorToHex([0.5, 0.5, 0.5, 0.5, 0,0,0,0,0,0,0,0,0,0,0,0]);
+        $this->assertEqualsIgnoringCase('f000', $hex);
+
+        $hex = $this->vectorTable->vectorToHex([0.5, 0.5, 0.5, 0.5, 0,0,0,0,0,0,0,0,0,0,0,1]);
+        $this->assertEqualsIgnoringCase('f001', $hex);
+
+        $hex = $this->vectorTable->vectorToHex([0.5, 0.5, 0.5, 0.5, 1,0,0,0,0,0,0,0,0,0,0,1]);
+        $this->assertEqualsIgnoringCase('F801', $hex);
+    }
+
     public function testSearch() {
         $multiples = 1;
         $this->vectorTable->getConnection()->begin_transaction();

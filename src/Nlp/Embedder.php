@@ -2,8 +2,6 @@
 
 namespace MHz\MysqlVector\Nlp;
 
-require_once __DIR__ . '/../../vendor/autoload.php';
-
 use OnnxRuntime\Model;
 use OnnxRuntime\Vendor;
 

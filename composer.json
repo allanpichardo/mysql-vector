@@ -3,7 +3,7 @@
   "description": "Perform vector operations natively on MySQL",
   "type": "library",
   "license": "MIT",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "authors": [
     {
       "name": "Allan Pichardo",
@@ -23,7 +23,7 @@
     "symfony/polyfill-ctype": "^1.28",
     "ext-iconv": "*",
     "symfony/polyfill-iconv": "^1.28",
-    "ankane/onnxruntime": "^0.1.7"
+    "ankane/onnxruntime": "^0.2.1"
   },
   "replace": {
     "symfony/polyfill-intl-normalizer": "^1.28",
