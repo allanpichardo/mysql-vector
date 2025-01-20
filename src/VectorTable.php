@@ -108,8 +108,25 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
             throw $e;
         }
 
+        // Drop the index if it exists.
+        $tableName = $this->getVectorTableName();
+        $query = "
+        SELECT COUNT(1) index_exists
+        FROM information_schema.statistics
+        WHERE table_name=? AND index_name='idx_binary_code'
+        ";
+        $stmt = $this->mysqli->prepare($query);
+        $stmt->bind_param('s', $tableName);
+        $stmt->execute();
+        $result = $stmt->get_result();
+        $row = $result->fetch_assoc();
+        if ($row['index_exists'] > 0) {
+          $this->mysqli->query("DROP INDEX idx_binary_code ON " . $tableName);
+        }
+        $stmt->close();
+
         $binaryCodeLengthInBytes = ceil($this->dimension / 8);
-        $this->mysqli->query("CREATE INDEX idx_binary_code ON " . $this->getVectorTableName() . " (binary_code($binaryCodeLengthInBytes))");
+        $this->mysqli->query("CREATE INDEX idx_binary_code ON " . $tableName . " (binary_code($binaryCodeLengthInBytes))");
 
         $this->mysqli->commit();
     }
