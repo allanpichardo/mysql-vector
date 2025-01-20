@@ -104,5 +104,19 @@ print_r($embeddings[1][0]); // [0.1, 0.2, 0.3, ..., 0.384]
 ## Contributions
 Contributions to this project are welcome. Please ensure that your code adheres to the existing coding standards and includes appropriate tests.
 
+## Development
+This project uses DDEV, a Docker-based development environment. To get started, install DDEV and run the following commands:
+
+```bash
+ddev start
+ddev composer install
+```
+
+To run the tests, use the following command:
+
+```bash
+ddev composer test
+```
+
 ## License
 MIT License
