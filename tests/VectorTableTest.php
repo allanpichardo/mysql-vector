@@ -15,7 +15,7 @@ class VectorTableTest extends TestCase
     {
         VectorTableTest::tearDownAfterClass();
 
-        $mysqli = new \mysqli('localhost', 'root', '', 'mysql-vector');
+        $mysqli = new \mysqli('db', 'db', 'db', 'db', 3306);
 
         // Check connection
         if ($mysqli->connect_error) {
@@ -203,7 +203,7 @@ class VectorTableTest extends TestCase
     public static function tearDownAfterClass(): void
     {
         // Clean up the database and close connection
-        $mysqli = new \mysqli('localhost', 'root', '', 'mysql-vector');
+        $mysqli = new \mysqli('db', 'db', 'db', 'db', 3306);
         $vectorTable = new VectorTable($mysqli, 'test_table', 3);
         $mysqli->query("DROP TABLE IF EXISTS " . $vectorTable->getVectorTableName());
         $mysqli->query("DROP FUNCTION IF EXISTS COSIM");
