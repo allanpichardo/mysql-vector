@@ -167,7 +167,7 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
      * @return int The ID of the inserted or updated vector
      * @throws \Exception If the vector could not be inserted or updated
      */
-    public function upsert(array $vector, int $id = null): int
+    public function upsert(array $vector, ?int $id = null): int
     {
         $magnitude = $this->getMagnitude($vector);
         $normalizedVector = $this->normalize($vector, $magnitude);
@@ -431,7 +431,7 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
      * @param float $epsilon The epsilon value to use for normalization
      * @return array The normalized vector
      */
-    private function normalize(array $vector, float $magnitude = null, float $epsilon = 1e-10): array {
+    private function normalize(array $vector, ?float $magnitude = null, float $epsilon = 1e-10): array {
         $magnitude = !empty($magnitude) ? $magnitude : $this->getMagnitude($vector);
         if ($magnitude == 0) {
             $magnitude = $epsilon;
