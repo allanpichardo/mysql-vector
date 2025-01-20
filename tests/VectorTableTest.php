@@ -82,14 +82,14 @@ class VectorTableTest extends TestCase
 
         $this->assertEquals($this->testVectorAmount, count($this->vectorTable->selectAll()));
 
-        echo "Inserting $this->testVectorAmount vectors in a batch...\n";
+        echo "Inserting another $this->testVectorAmount vectors in a batch...\n";
         $time = microtime(true);
         $this->vectorTable->batchInsert($vecArray);
 
         $time = microtime(true) - $time;
         echo "Elapsed time: " . sprintf("%.2f", $time) . " seconds\n";
 
-        $this->assertEquals($this->testVectorAmount, $this->vectorTable->count());
+        $this->assertEquals($this->testVectorAmount * 2, $this->vectorTable->count());
 
         $id = $lastId;
         $newVec = $this->getRandomVectors(1, $this->dimension)[0];
