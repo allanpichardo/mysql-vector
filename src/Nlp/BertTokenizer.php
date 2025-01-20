@@ -406,7 +406,7 @@ class BertTokenizer
      * @return array
      * @throws \Exception
      */
-    public function encode(string $text, string $textPair = null, array $options = []): array {
+    public function encode(string $text, ?string $textPair = null, array $options = []): array {
         $addSpecialTokens = $options['add_special_tokens'] ?? true;
 
         $tokens = $this->encodeText($text);
