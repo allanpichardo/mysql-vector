@@ -58,26 +58,30 @@ CREATE FUNCTION COSIM(v1 JSON, v2 JSON) RETURNS FLOAT DETERMINISTIC BEGIN DECLAR
     /**
      * Convert an n-dimensional vector in to an n-bit binary code
      * @param array $vector
-     * @return int
+     * @return string
      */
-    public function vectorToHex(array $vector): string {
-        $binary = '';
-        foreach($vector as $value) {
-            $binary .= $value > 0 ? '1' : '0';
+    private function vectorToHex(array $vector): string {
+        $bin = '';
+
+        $bit = 0;
+        $char = 0;
+        foreach ($vector as $val){
+            if ($val > 0){
+                $char |= 1<<$bit;
+            }
+
+            $bit++;
+            if ($bit === 8){
+                $bin .= chr($char);
+                $bit = 0;
+                $char = 0;
+            }
+        }
+        if ($bit > 0){
+            $bin .= chr($char);
         }
 
-        $padded = str_pad($binary, ceil(strlen($binary) / 8) * 8, '0', STR_PAD_LEFT);
-
-        return $this->binaryToHexadecimal($padded);
-    }
-
-    private function binaryToHexadecimal(string $binaryString): string {
-        $hex = '';
-        foreach(str_split($binaryString, 4) as $char) {
-            $hex .= strtoupper(dechex(bindec($char)));
-        }
-        $hex = str_pad($hex, ceil(strlen($hex) / 4) * 4, '0', STR_PAD_LEFT);
-        return $hex;
+        return bin2hex($bin);
     }
 
     /**
